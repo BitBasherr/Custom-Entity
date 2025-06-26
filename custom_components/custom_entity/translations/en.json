@@ -1,43 +1,46 @@
 {
-  "title": {
-    "title": "My Trackers"
-  },
+  "title": "Custom Entity",
+
   "config": {
     "step": {
       "user": {
-        "title": "Configure Tracker",
+        "title": "Set up Custom Entity",
+        "description": "Enter the basic details for your custom entity.",
         "data": {
-          "friendly_name": "Device Name",
-          "source_entity": "Source Entity",
-          "combine": "Combine Zone and Sensor"
+          "name": "Device name",
+          "source_entity": "Source entity",
+          "combine": "Combine zone and sensor"
         }
       },
+
       "combine": {
-        "title": "Combine Sensor",
+        "title": "Combine sensor",
         "data": {
-          "combine_entity": "Sensor to Combine",
-          "combine_attr_name": "Combine Sensor Attribute Name"
+          "combine_entity": "Sensor to combine",
+          "combine_attr_name": "Combine sensor attribute name"
         }
       }
     }
   },
+
   "options": {
     "step": {
       "init": {
-        "title": "Tracker Options",
+        "title": "Tracker options",
         "data": {
-          "battery_entity": "Battery Sensor (optional)",
-          "attribute_entity": "Extra Attribute Sensor (optional)",
-          "attribute_name": "Custom Attribute Friendly Name",
-          "attribute_sensors": "Additional Attribute Sensors (name: sensor entity mapping)",
-          "combine": "Combine Zone and Sensor"
+          "battery_entity": "Battery sensor (optional)",
+          "attribute_entity": "Extra attribute sensor (optional)",
+          "attribute_name": "Custom attribute friendly name",
+          "attribute_sensors": "Additional attribute sensors (name → entity map)",
+          "combine": "Combine zone and sensor"
         }
       },
+
       "combine": {
-        "title": "Combine Sensor",
+        "title": "Combine sensor",
         "data": {
-          "combine_entity": "Sensor to Combine",
-          "combine_attr_name": "Combine Sensor Attribute Name"
+          "combine_entity": "Sensor to combine",
+          "combine_attr_name": "Combine sensor attribute name"
         }
       }
     }
