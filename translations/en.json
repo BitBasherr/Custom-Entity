@@ -1,0 +1,45 @@
+{
+  "title": {
+    "title": "My Trackers"
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure Tracker",
+        "data": {
+          "friendly_name": "Device Name",
+          "source_entity": "Source Entity",
+          "combine": "Combine Zone and Sensor"
+        }
+      },
+      "combine": {
+        "title": "Combine Sensor",
+        "data": {
+          "combine_entity": "Sensor to Combine",
+          "combine_attr_name": "Combine Sensor Attribute Name"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Tracker Options",
+        "data": {
+          "battery_entity": "Battery Sensor (optional)",
+          "attribute_entity": "Extra Attribute Sensor (optional)",
+          "attribute_name": "Custom Attribute Friendly Name",
+          "attribute_sensors": "Additional Attribute Sensors (name: sensor entity mapping)",
+          "combine": "Combine Zone and Sensor"
+        }
+      },
+      "combine": {
+        "title": "Combine Sensor",
+        "data": {
+          "combine_entity": "Sensor to Combine",
+          "combine_attr_name": "Combine Sensor Attribute Name"
+        }
+      }
+    }
+  }
+}
