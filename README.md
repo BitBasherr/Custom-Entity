@@ -10,12 +10,11 @@ with a live sensor value. All configurable from the UI; no YAML required.
 
    [![Install with HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=BitBasherr&repository=Custom-Entity)
 
-   *(Or copy `custom_components/custom_entity/` into your config folder and restart.)*
+   *(HACS will prompt you to restart Home Assistant once the download finishes.)*
 
 2. **Add the integration via UI**
 
    [![Add Custom Entity to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=custom_entity)
-
 
 ---
 
