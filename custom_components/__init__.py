@@ -16,7 +16,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = entry.data
 
     # Forward to platform
-    await hass.config_entries.async_forward_entry_setups(entry, ["device_tracker"])
+    await hass.config_entries.async_forward_entry_setups(entry, ["r"])
 
     # ----- NEW: reload entity when options change --------------------
     async def _reload_on_update(hass: HomeAssistant, entry: ConfigEntry):
