@@ -8,6 +8,7 @@ with a live sensor value. All configurable from the UI; no YAML required.
 
 1. **Install the integration code**
 
+   [![Install with HACS][(https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?repository_url=https://github.com/BitBasherr/Custom-Entitycustom_components/custom_entity
    [![Install with HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?repository_url=https://github.com/BitBasherr/Custom-Entitycustom_components/custom_entity
 
    *(HACS will prompt you to restart Home Assistant once the download finishes.)*
