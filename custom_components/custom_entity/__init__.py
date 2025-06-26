@@ -6,7 +6,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
 
-PLATFORMS = ["sensor"]          # <— the platform we register
+PLATFORMS = ["entity"]          # <— the platform we register
 
 
 async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
