@@ -4,9 +4,18 @@ Create **any kind of entity** by mirroring the state of another one—then pick 
 attributes to inherit, add more from other sensors, and even merge a zone name
 with a live sensor value. All configurable from the UI; no YAML required.
 
-[![Add Custom Entity to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=custom_entity)
+## Quick install
 
-[![Install with HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?repository_url=https://github.com/BitBasherr/Custom-Entity&integration=custom_entity)
+1. **Install the integration code**
+
+   [![Install with HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=BitBasherr&repository=Custom-Entity)
+
+   *(Or copy `custom_components/custom_entity/` into your config folder and restart.)*
+
+2. **Add the integration via UI**
+
+   [![Add Custom Entity to Home Assistant](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start?domain=custom_entity)
+
 
 ---
 
