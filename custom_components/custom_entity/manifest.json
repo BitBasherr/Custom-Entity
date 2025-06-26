@@ -1,7 +1,7 @@
 {
   "domain": "custom_entity",
   "name": "Custom Entity",
-  "version": "v1.0.0",
+  "version": "v1.0.1",
   "config_flow": true,
   "documentation": "https://github.com/BitBasherr/Custom-Entity",
   "requirements": [],
