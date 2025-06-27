@@ -82,5 +82,12 @@ class CustomBaseEntity:
                     key = self._combine_attr_name or "combine"
                     self._extra_attrs[key] = co.state
 
+        # Tracker lat/lon cache (only runs for tracker subclass)
+        if hasattr(self, "_lat"):
+            src = self.hass.states.get(self._source_entity)
+            if src is not None:
+                self._lat = src.attributes.get("latitude")
+                self._lon = src.attributes.get("longitude")
 
+        # Write state every time, regardless of lat/lon
         self.async_write_ha_state()
