@@ -1,4 +1,4 @@
-"""Full Options flow for Custom Entity."""
+"""Options flow for Custom Entity."""
 from __future__ import annotations
 
 import voluptuous as vol
@@ -21,7 +21,7 @@ ENTITY_SENSOR = selector({"entity": {"domain": "sensor"}})
 
 
 class CustomEntityOptionsFlow(config_entries.OptionsFlow):
-    """Wizard to edit battery, combine, hyphenate, extra sensors."""
+    """Edit battery, combine, hyphenate, extra sensors."""
 
     def __init__(self, entry: config_entries.ConfigEntry):
         self.entry = entry
@@ -29,7 +29,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         self._opts.setdefault(CONF_ATTRIBUTE_SENSORS, {})
         self._pending_entity: str | None = None
 
-    # ── Step 1: battery + combine toggle ──────────────────────────────
+    # ── 1: battery & combine toggle ───────────────────────────────────
     async def async_step_init(self, user_input=None):
         if user_input:
             # battery
@@ -38,8 +38,10 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             else:
                 self._opts.pop(CONF_BATTERY_ENTITY, None)
 
-            # combine toggle
+            # combine toggle + hyphenate flag
             self._opts[CONF_COMBINE] = user_input.get(CONF_COMBINE, False)
+            self._opts[CONF_HYPHENATE_STATE] = user_input.get(CONF_HYPHENATE_STATE, False)
+
             if self._opts[CONF_COMBINE]:
                 return await self.async_step_combine()
             return await self.async_step_attr_menu()
@@ -49,10 +51,11 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema({
                 vol.Optional(CONF_BATTERY_ENTITY, default=self._opts.get(CONF_BATTERY_ENTITY)): ENTITY_SENSOR,
                 vol.Required(CONF_COMBINE, default=self._opts.get(CONF_COMBINE, False)): bool,
+                vol.Optional(CONF_HYPHENATE_STATE, default=self._opts.get(CONF_HYPHENATE_STATE, False)): bool,
             }),
         )
 
-    # ── Step 2: combine details ───────────────────────────────────────
+    # ── 2: combine details ────────────────────────────────────────────
     async def async_step_combine(self, user_input=None):
         if user_input:
             self._opts.update({
@@ -71,7 +74,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             }),
         )
 
-    # ── Step 3: attribute menu ────────────────────────────────────────
+    # ── 3: attribute menu ────────────────────────────────────────────
     async def async_step_attr_menu(self, user_input=None):
         if user_input:
             choice = user_input.get("choice")
@@ -85,7 +88,6 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 friendly = choice[5:]
                 self._opts[CONF_ATTRIBUTE_SENSORS].pop(friendly, None)
 
-        # dynamic buttons
         buttons = {
             "done": "✅ Done",
             "add":  "➕ Add attribute",
@@ -103,7 +105,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             },
         )
 
-    # pick entity then name
+    # add attribute sensor
     async def async_step_attr_pick_entity(self, user_input=None):
         if user_input:
             self._pending_entity = user_input["entity"]
@@ -126,7 +128,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema({vol.Required("name"): str}),
         )
 
-    # ── legacy helper for HA ≤ 2025.6 ─────────────────────────────────
+    # ── compatibility for HA ≤ 2025.6 ────────────────────────────────
     @callback
     def async_get_result(self):
         return self._opts
