@@ -20,6 +20,16 @@ PLATFORMS = [
     "climate"
 ]
 
+async def async_migrate_entry(hass, entry):
+    """Migrate old config‐entry data if needed."""
+    if entry.version == 1:
+        # nothing to change, just bump version flag
+        entry.version = 2
+        return True
+
+    return True  # already up-to-date
+
+
 async def async_setup(hass: HomeAssistant, _config: dict) -> bool:
     return True
 

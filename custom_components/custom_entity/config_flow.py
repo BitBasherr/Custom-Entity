@@ -40,7 +40,7 @@ SELECT_SENSOR = selector({"entity": {"domain": "sensor"}})
 class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Three-step wizard + optional combine."""
 
-    VERSION = 2
+    VERSION = 1
 
     # ── STEP 1 ── platform + name + source
     async def async_step_user(self, user_input: dict | None = None):
