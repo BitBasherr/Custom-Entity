@@ -7,17 +7,35 @@
         "title": "Set up Custom Entity",
         "description": "Enter the basic details for your custom entity.",
         "data": {
+          "platform": "Platform type",
           "name": "Device name",
+          "friendly_name": "Friendly name",
           "source_entity": "Source entity",
           "combine": "Combine zone and sensor"
         }
+      },
+
+      "device_class": {
+        "title": "Device class",
+        "data": { "device_class": "Device class" }
+      },
+
+      "inherit_attrs": {
+        "title": "Inherit attributes",
+        "data": { "inherit_attributes": "Attributes to copy" }
+      },
+
+      "combine_toggle": {
+        "title": "Combine sensor?",
+        "data": { "combine": "Combine with another sensor" }
       },
 
       "combine": {
         "title": "Combine sensor",
         "data": {
           "combine_entity": "Sensor to combine",
-          "combine_attr_name": "Combine sensor attribute name"
+          "combine_attr_name": "Combine sensor attribute name",
+          "hyphenate_state": "Hyphenate main state"
         }
       }
     }
@@ -32,7 +50,8 @@
           "attribute_entity": "Extra attribute sensor (optional)",
           "attribute_name": "Custom attribute friendly name",
           "attribute_sensors": "Additional attribute sensors (name → entity map)",
-          "combine": "Combine zone and sensor"
+          "combine": "Combine zone and sensor",
+          "hyphenate_state": "Hyphenate main state"
         }
       },
 
@@ -40,8 +59,24 @@
         "title": "Combine sensor",
         "data": {
           "combine_entity": "Sensor to combine",
-          "combine_attr_name": "Combine sensor attribute name"
+          "combine_attr_name": "Combine sensor attribute name",
+          "hyphenate_state": "Hyphenate main state"
         }
+      },
+
+      "attr_menu": {
+        "title": "Extra attributes",
+        "description": "Current: {current}"
+      },
+
+      "attr_pick_entity": {
+        "title": "Select attribute sensor",
+        "data": { "entity": "Sensor entity" }
+      },
+
+      "attr_pick_name": {
+        "title": "Friendly name",
+        "data": { "name": "Attribute friendly name" }
       }
     }
   }

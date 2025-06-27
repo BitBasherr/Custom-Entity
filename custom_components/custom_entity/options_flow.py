@@ -1,9 +1,8 @@
-"""Wizard-style Options flow for Custom Entity (with ✅ Done button)."""
+"""Full Options flow for Custom Entity."""
 from __future__ import annotations
 
-import logging
 import voluptuous as vol
-
+import logging
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers.selector import selector
@@ -14,6 +13,7 @@ from .const import (
     CONF_COMBINE,
     CONF_COMBINE_ENTITY,
     CONF_COMBINE_ATTR_NAME,
+    CONF_HYPHENATE_STATE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -21,28 +21,24 @@ ENTITY_SENSOR = selector({"entity": {"domain": "sensor"}})
 
 
 class CustomEntityOptionsFlow(config_entries.OptionsFlow):
-    """Interactive wizard for editing Custom Entity options."""
+    """Wizard to edit battery, combine, hyphenate, extra sensors."""
 
-    def __init__(self, entry: config_entries.ConfigEntry) -> None:
-        try:
-            super().__init__(entry)       # HA < 2025.7
-            self._entry = self.config_entry
-        except TypeError:
-            super().__init__()            # HA ≥ 2025.7
-            self._entry = entry
-
-        self._opts: dict = dict(self._entry.options or {})
+    def __init__(self, entry: config_entries.ConfigEntry):
+        self.entry = entry
+        self._opts: dict = dict(entry.options or {})
         self._opts.setdefault(CONF_ATTRIBUTE_SENSORS, {})
         self._pending_entity: str | None = None
 
-    # ------------------------------------------------------------------
+    # ── Step 1: battery + combine toggle ──────────────────────────────
     async def async_step_init(self, user_input=None):
-        if user_input is not None:
-            if ent := user_input.get(CONF_BATTERY_ENTITY):
-                self._opts[CONF_BATTERY_ENTITY] = ent
+        if user_input:
+            # battery
+            if user_input.get(CONF_BATTERY_ENTITY):
+                self._opts[CONF_BATTERY_ENTITY] = user_input[CONF_BATTERY_ENTITY]
             else:
                 self._opts.pop(CONF_BATTERY_ENTITY, None)
 
+            # combine toggle
             self._opts[CONF_COMBINE] = user_input.get(CONF_COMBINE, False)
             if self._opts[CONF_COMBINE]:
                 return await self.async_step_combine()
@@ -50,78 +46,66 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(CONF_BATTERY_ENTITY): ENTITY_SENSOR,
-                    vol.Required(
-                        CONF_COMBINE,
-                        default=self._opts.get(CONF_COMBINE, False),
-                    ): bool,
-                }
-            ),
+            data_schema=vol.Schema({
+                vol.Optional(CONF_BATTERY_ENTITY, default=self._opts.get(CONF_BATTERY_ENTITY)): ENTITY_SENSOR,
+                vol.Required(CONF_COMBINE, default=self._opts.get(CONF_COMBINE, False)): bool,
+            }),
         )
 
-    # ------------------------------------------------------------------
+    # ── Step 2: combine details ───────────────────────────────────────
     async def async_step_combine(self, user_input=None):
-        if user_input is not None:
-            self._opts[CONF_COMBINE_ENTITY] = user_input[CONF_COMBINE_ENTITY]
-            self._opts[CONF_COMBINE_ATTR_NAME] = user_input[CONF_COMBINE_ATTR_NAME]
+        if user_input:
+            self._opts.update({
+                CONF_COMBINE_ENTITY:    user_input[CONF_COMBINE_ENTITY],
+                CONF_COMBINE_ATTR_NAME: user_input[CONF_COMBINE_ATTR_NAME],
+                CONF_HYPHENATE_STATE:   user_input.get(CONF_HYPHENATE_STATE, False),
+            })
             return await self.async_step_attr_menu()
 
         return self.async_show_form(
             step_id="combine",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        CONF_COMBINE_ENTITY,
-                        default=self._opts.get(CONF_COMBINE_ENTITY, ""),
-                    ): ENTITY_SENSOR,
-                    vol.Required(
-                        CONF_COMBINE_ATTR_NAME,
-                        default=self._opts.get(CONF_COMBINE_ATTR_NAME, ""),
-                    ): str,
-                }
-            ),
+            data_schema=vol.Schema({
+                vol.Required(CONF_COMBINE_ENTITY, default=self._opts.get(CONF_COMBINE_ENTITY)): ENTITY_SENSOR,
+                vol.Required(CONF_COMBINE_ATTR_NAME, default=self._opts.get(CONF_COMBINE_ATTR_NAME, "combine")): str,
+                vol.Optional(CONF_HYPHENATE_STATE, default=self._opts.get(CONF_HYPHENATE_STATE, False)): bool,
+            }),
         )
 
-    # ------------------------------------------------------------------
+    # ── Step 3: attribute menu ────────────────────────────────────────
     async def async_step_attr_menu(self, user_input=None):
-        """Show list of attributes; add/remove or finish."""
-        # --------- POST -------------------------------------------------
-        if user_input is not None:
-            # Empty submit or explicit "done"
-            if not user_input or user_input.get("choice") == "done":
+        if user_input:
+            choice = user_input.get("choice")
+            if not choice or choice == "done":
                 return self.async_create_entry(title="", data=self._opts)
 
-            action = user_input["choice"]
-            if action == "add":
+            if choice == "add":
                 return await self.async_step_attr_pick_entity()
 
-            # delete
-            friendly = action[5:]
-            self._opts[CONF_ATTRIBUTE_SENSORS].pop(friendly, None)
+            if choice.startswith("del__"):
+                friendly = choice[5:]
+                self._opts[CONF_ATTRIBUTE_SENSORS].pop(friendly, None)
 
-        # --------- GET --------------------------------------------------
-        buttons: dict[str, str] = {
-            "done": "✅  Done",
-            "add":  "➕  Add attribute",
+        # dynamic buttons
+        buttons = {
+            "done": "✅ Done",
+            "add":  "➕ Add attribute",
+            **{
+                f"del__{k}": f"🗑️ Remove “{k}”"
+                for k in sorted(self._opts[CONF_ATTRIBUTE_SENSORS])
+            },
         }
-        for friendly in sorted(self._opts[CONF_ATTRIBUTE_SENSORS]):
-            buttons[f"del__{friendly}"] = f"🗑️  Remove “{friendly}”"
 
         return self.async_show_form(
             step_id="attr_menu",
-            data_schema=vol.Schema(
-                {vol.Optional("choice"): vol.In(buttons)}
-            ),
+            data_schema=vol.Schema({vol.Optional("choice"): vol.In(buttons)}),
             description_placeholders={
-                "current": ", ".join(self._opts[CONF_ATTRIBUTE_SENSORS]) or "none",
+                "current": ", ".join(self._opts[CONF_ATTRIBUTE_SENSORS]) or "none"
             },
         )
 
-    # ------------------------------------------------------------------
+    # pick entity then name
     async def async_step_attr_pick_entity(self, user_input=None):
-        if user_input is not None:
+        if user_input:
             self._pending_entity = user_input["entity"]
             return await self.async_step_attr_pick_name()
 
@@ -131,7 +115,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         )
 
     async def async_step_attr_pick_name(self, user_input=None):
-        if user_input is not None:
+        if user_input:
             friendly = user_input["name"].strip()
             self._opts[CONF_ATTRIBUTE_SENSORS][friendly] = self._pending_entity
             self._pending_entity = None
@@ -142,9 +126,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema({vol.Required("name"): str}),
         )
 
-    # ------------------------------------------------------------------
+    # ── legacy helper for HA ≤ 2025.6 ─────────────────────────────────
     @callback
     def async_get_result(self):
         return self._opts
-
-    async_step_attr_menu.last_step = True  # type: ignore[attr-defined]

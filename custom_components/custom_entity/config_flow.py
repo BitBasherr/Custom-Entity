@@ -4,10 +4,23 @@ from __future__ import annotations
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.helpers.selector import selector
-from homeassistant.const import Platform
 
-from .const import DOMAIN, CONF_SOURCE_ENTITY, CONF_FRIENDLY_NAME, CONF_DEVICE_CLASS, CONF_INHERIT_ATTRS, CONF_PLATFORM
+from .const import (
+    DOMAIN,
+    # core
+    CONF_SOURCE_ENTITY,
+    CONF_PLATFORM,
+    CONF_FRIENDLY_NAME,
+    CONF_DEVICE_CLASS,
+    CONF_INHERIT_ATTRS,
+    # combine / extras
+    CONF_COMBINE,
+    CONF_COMBINE_ENTITY,
+    CONF_COMBINE_ATTR_NAME,
+    CONF_HYPHENATE_STATE,
+)
 
+# ────────────────────────────────────────────────────────────
 PLATFORM_OPTIONS = [
     "sensor", "binary_sensor", "switch", "number", "text", "light",
     "device_tracker", "select", "button", "climate"
@@ -16,24 +29,23 @@ PLATFORM_OPTIONS = [
 DEVICE_CLASSES = {
     "sensor": ["temperature", "humidity", "energy", "voltage", "power", "battery", "timestamp"],
     "binary_sensor": ["motion", "occupancy", "opening", "smoke", "sound", "vibration"],
-    "number": [],
-    "switch": [],
-    "device_tracker": [],
-    "light": [],
-    "climate": [],
-    "select": [],
-    "text": [],
-    "button": [],
+    # others empty → no device-class prompt
 }
 
+SELECT_ANY_ENTITY = selector({"entity": {}})
+SELECT_SENSOR = selector({"entity": {"domain": "sensor"}})
 
+# ────────────────────────────────────────────────────────────
 class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 1
+    """Three-step wizard + optional combine."""
 
-    async def async_step_user(self, user_input=None):
+    VERSION = 2
+
+    # ── STEP 1 ── platform + name + source
+    async def async_step_user(self, user_input: dict | None = None):
         if user_input is not None:
-            self._data = {
-                CONF_PLATFORM: user_input[CONF_PLATFORM],
+            self._data: dict = {
+                CONF_PLATFORM:      user_input[CONF_PLATFORM],
                 CONF_FRIENDLY_NAME: user_input[CONF_FRIENDLY_NAME],
                 CONF_SOURCE_ENTITY: user_input[CONF_SOURCE_ENTITY],
             }
@@ -41,20 +53,16 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_PLATFORM): selector({
-                        "select": {
-                            "options": PLATFORM_OPTIONS,
-                            "mode": "dropdown"
-                        }
-                    }),
-                    vol.Required(CONF_FRIENDLY_NAME): str,
-                    vol.Required(CONF_SOURCE_ENTITY): selector({"entity": {}})
-                }
-            )
+            data_schema=vol.Schema({
+                vol.Required(CONF_PLATFORM): selector({
+                    "select": {"options": PLATFORM_OPTIONS, "mode": "dropdown"}
+                }),
+                vol.Required(CONF_FRIENDLY_NAME): str,
+                vol.Required(CONF_SOURCE_ENTITY): SELECT_ANY_ENTITY,
+            }),
         )
 
+    # ── STEP 2 ── device-class (if any)
     async def async_step_device_class(self, user_input=None):
         platform = self._data[CONF_PLATFORM]
         class_opts = DEVICE_CLASSES.get(platform, [])
@@ -63,24 +71,25 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data[CONF_DEVICE_CLASS] = user_input.get(CONF_DEVICE_CLASS)
             return await self.async_step_inherit_attrs()
 
-        schema = {}
-        if class_opts:
-            schema[vol.Optional(CONF_DEVICE_CLASS)] = selector({
-                "select": {
-                    "options": class_opts,
-                    "mode": "dropdown"
-                }
-            })
+        if not class_opts:
+            # skip if platform has no classes
+            self._data[CONF_DEVICE_CLASS] = None
+            return await self.async_step_inherit_attrs()
 
         return self.async_show_form(
             step_id="device_class",
-            data_schema=vol.Schema(schema) if schema else vol.Schema({}),
+            data_schema=vol.Schema({
+                vol.Optional(CONF_DEVICE_CLASS): selector({
+                    "select": {"options": class_opts, "mode": "dropdown"}
+                })
+            }),
         )
 
+    # ── STEP 3 ── choose attributes to mirror
     async def async_step_inherit_attrs(self, user_input=None):
         if user_input is not None:
             self._data[CONF_INHERIT_ATTRS] = user_input.get(CONF_INHERIT_ATTRS, [])
-            return self.async_create_entry(title=self._data[CONF_FRIENDLY_NAME], data=self._data)
+            return await self.async_step_combine_toggle()
 
         state = self.hass.states.get(self._data[CONF_SOURCE_ENTITY])
         attrs = list(state.attributes) if state else []
@@ -91,9 +100,52 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_INHERIT_ATTRS): selector({
                     "select": {
                         "options": attrs,
+                        "multiple": True,
                         "mode": "dropdown",
-                        "multiple": True
                     }
                 })
-            })
+            }),
         )
+
+    # ── STEP 4 ── simple yes/no combine toggle
+    async def async_step_combine_toggle(self, user_input=None):
+        if user_input is not None:
+            if user_input.get(CONF_COMBINE):
+                return await self.async_step_combine()
+            # no combine → finish
+            self._data[CONF_COMBINE] = False
+            return self.async_create_entry(title=self._data[CONF_FRIENDLY_NAME], data=self._data)
+
+        return self.async_show_form(
+            step_id="combine_toggle",
+            data_schema=vol.Schema({
+                vol.Required(CONF_COMBINE, default=False): bool
+            }),
+        )
+
+    # ── STEP 5 ── combine details (+ hyphenate checkbox)
+    async def async_step_combine(self, user_input=None):
+        if user_input is not None:
+            self._data.update({
+                CONF_COMBINE: True,
+                CONF_COMBINE_ENTITY: user_input[CONF_COMBINE_ENTITY],
+                CONF_COMBINE_ATTR_NAME: user_input[CONF_COMBINE_ATTR_NAME],
+                CONF_HYPHENATE_STATE: user_input.get(CONF_HYPHENATE_STATE, False),
+            })
+            return self.async_create_entry(title=self._data[CONF_FRIENDLY_NAME], data=self._data)
+
+        return self.async_show_form(
+            step_id="combine",
+            data_schema=vol.Schema({
+                vol.Required(CONF_COMBINE_ENTITY): SELECT_SENSOR,
+                vol.Required(CONF_COMBINE_ATTR_NAME): str,
+                vol.Optional(CONF_HYPHENATE_STATE, default=False): bool,
+            }),
+        )
+
+    # ── options flow passthrough ──
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        from .options_flow import CustomEntityOptionsFlow
+        return CustomEntityOptionsFlow(config_entry)

@@ -11,3 +11,4 @@ CONF_ATTRIBUTE_SENSORS = "attribute_sensors"    # {friendly → entity_id}
 CONF_COMBINE           = "combine"
 CONF_COMBINE_ENTITY    = "combine_entity"
 CONF_COMBINE_ATTR_NAME = "combine_attr_name"
+CONF_HYPHENATE_STATE   = "hyphenate_state"
