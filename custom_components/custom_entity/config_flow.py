@@ -45,12 +45,16 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     # ── STEP 1 ── platform + name + source
     async def async_step_user(self, user_input: dict | None = None):
         if user_input is not None:
-            self._data: dict = {
-                CONF_PLATFORM:      user_input[CONF_PLATFORM],
-                CONF_FRIENDLY_NAME: user_input[CONF_FRIENDLY_NAME],
-                CONF_SOURCE_ENTITY: user_input[CONF_SOURCE_ENTITY],
-            }
-            return await self.async_step_device_class()
+            self._data.update({
+                CONF_COMBINE:           True,
+                CONF_COMBINE_ENTITY:    user_input[CONF_COMBINE_ENTITY],
+                CONF_COMBINE_ATTR_NAME: user_input[CONF_COMBINE_ATTR_NAME],
+                CONF_HYPHENATE_STATE:   user_input.get(CONF_HYPHENATE_STATE, False),   # ← NEW
+            })
+            return self.async_create_entry(
+                title=self._data[CONF_FRIENDLY_NAME],
+                data=self._data,
+            )
 
         return self.async_show_form(
             step_id="user",
