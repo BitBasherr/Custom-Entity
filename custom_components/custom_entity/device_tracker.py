@@ -28,7 +28,7 @@ class CustomTrackerEntity(CustomBaseEntity, TrackerEntity):
     def longitude(self):
         return self._lon
 
-    # -------- force HA to show our hyphenated _state when requested --
+    # -------- force HA to show the hyphenated _state when requested --
     @property
     def state(self):
         hyphen = (
