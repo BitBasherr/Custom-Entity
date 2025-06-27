@@ -1,7 +1,7 @@
 from homeassistant.components.device_tracker import TrackerEntity, SourceType
 from .entity_base import CustomBaseEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
@@ -27,7 +27,8 @@ class CustomTrackerEntity(CustomBaseEntity, TrackerEntity):
     @property
     def longitude(self):
         return self._lon
-
+    
+    @callback
     # Override _update to store lat/lon and then call parent logic
     def _update(self, _event):
         src_state = self.hass.states.get(self._source_entity)
