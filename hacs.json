@@ -1,0 +1,8 @@
+{
+  "name": "Custom Entity",
+  "content_in_root": false,
+  "domain": "custom_entity",
+  "country": "US",
+  "homeassistant": "2024.6.0",
+  "render_readme": true
+}
