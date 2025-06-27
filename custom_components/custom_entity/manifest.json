@@ -9,4 +9,5 @@
   "requirements": [],
   "dependencies": [],
   "codeowners": ["@BitBasherr"]
+  "platforms": ["sensor", "binary_sensor", "device_tracker", "number", "switch"]
 }
