@@ -67,10 +67,20 @@ class CustomBaseEntity:
             st = self.hass.states.get(ent)
             if st is not None:
                 self._extra_attrs[friendly] = st.state
-
         if self._combine and self._combine_entity:
             co = self.hass.states.get(self._combine_entity)
             if co:
-                self._extra_attrs[self._combine_attr_name or "combine"] = co.state
+                # flag comes from options (preferred) or original data
+                hyphen = (
+                    self._entry.options.get(CONF_HYPHENATE_STATE)
+                    if self._entry.options
+                    else self._entry.data.get(CONF_HYPHENATE_STATE, False)
+                )
+                if hyphen:
+                    self._state = f"{self._state} - {co.state}"
+                else:
+                    key = self._combine_attr_name or "combine"
+                    self._extra_attrs[key] = co.state
+
 
         self.async_write_ha_state()
