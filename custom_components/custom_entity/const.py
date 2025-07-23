@@ -13,4 +13,4 @@ CONF_COMBINE_ENTITY    = "combine_entity"
 CONF_COMBINE_ATTR_NAME = "combine_attr_name"
 CONF_HYPHENATE_STATE   = "hyphenate_state"
 # NEW: second entity that must be ON for tracker == home
-+CONF_PRESENCE_HELPER = "presence_helper"
+CONF_PRESENCE_HELPER = "presence_helper"
