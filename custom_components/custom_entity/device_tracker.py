@@ -2,7 +2,7 @@ from homeassistant.components.device_tracker import TrackerEntity, SourceType
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
 from .entity_base import CustomBaseEntity
-from .const import CONF_HYPHENATE_STATE
+from .const import CONF_HYPHENATE_STATE, CONF_PRESENCE_HELPER
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
@@ -18,6 +18,12 @@ class CustomTrackerEntity(CustomBaseEntity, TrackerEntity):
         self._attr_source_type = SourceType.GPS
         self._lat: float | None = None
         self._lon: float | None = None
+        # helper boolean (may be None for legacy configs)
+        self._helper = (
+            self._entry.options.get(CONF_PRESENCE_HELPER)
+            if self._entry.options
+            else self._entry.data.get(CONF_PRESENCE_HELPER)
+        )
 
     # -------- base Tracker props (cached by entity_base) -------------
     @property
@@ -49,3 +55,19 @@ class CustomTrackerEntity(CustomBaseEntity, TrackerEntity):
             self._lat = src.attributes.get("latitude")
             self._lon = src.attributes.get("longitude")
         super()._update(_event)
+        src = self.hass.states.get(self._source_entity)
+        helper_ok = (
+            self.hass.states.is_state(self._helper, "on")  # True → boolean ON
+            if self._helper
+            else True                                       # no helper → ignore
+        )
+
+        if src and helper_ok:
+            self._lat = src.attributes.get("latitude")
+            self._lon = src.attributes.get("longitude")
+            super()._update(_event)              # mirrors tracker state
+        else:
+            # force NOT_HOME when helper is off or tracker unknown
+            self._state = "not_home"
+            self._lat = self._lon = None
+            self.async_write_ha_state()

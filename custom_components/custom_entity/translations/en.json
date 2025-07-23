@@ -11,6 +11,9 @@
           "name": "Device name",
           "friendly_name": "Friendly name",
           "source_entity": "Source entity",
+          "presence_helper":"Helper binary‑sensor",
+          "presence_helper_description":
+                            "Must be ON and tracker must be HOME for presence",
           "combine": "Combine zone and sensor"
         }
       },

@@ -46,6 +46,12 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_FRIENDLY_NAME: user_input[CONF_FRIENDLY_NAME],
                 CONF_SOURCE_ENTITY: user_input[CONF_SOURCE_ENTITY],
             }
+            self._data = {
+                CONF_PLATFORM:      user_input[CONF_PLATFORM],
+                CONF_FRIENDLY_NAME: user_input[CONF_FRIENDLY_NAME],
+                CONF_SOURCE_ENTITY: user_input[CONF_SOURCE_ENTITY],
+                CONF_PRESENCE_HELPER: user_input.get(CONF_PRESENCE_HELPER),
+            }
             return await self.async_step_device_class()
 
         return self.async_show_form(
@@ -56,6 +62,8 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 }),
                 vol.Required(CONF_FRIENDLY_NAME): str,
                 vol.Required(CONF_SOURCE_ENTITY): SELECT_ANY_ENTITY,
+                # NEW field – only shown when platform == device_tracker
+                vol.Optional(CONF_PRESENCE_HELPER): SELECT_ANY_ENTITY,
             }),
         )
 
