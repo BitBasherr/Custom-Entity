@@ -46,6 +46,7 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_PLATFORM:      user_input[CONF_PLATFORM],
                 CONF_FRIENDLY_NAME: user_input[CONF_FRIENDLY_NAME],
                 CONF_SOURCE_ENTITY: user_input[CONF_SOURCE_ENTITY],
+                CONF_PRESENCE_HELPER: user_input.get(CONF_PRESENCE_HELPER),
             }
             self._data = {
                 CONF_PLATFORM:      user_input[CONF_PLATFORM],

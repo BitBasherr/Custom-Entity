@@ -51,23 +51,17 @@ class CustomTrackerEntity(CustomBaseEntity, TrackerEntity):
     @callback
     def _update(self, _event):
         src = self.hass.states.get(self._source_entity)
-        if src:
-            self._lat = src.attributes.get("latitude")
-            self._lon = src.attributes.get("longitude")
-        super()._update(_event)
-        src = self.hass.states.get(self._source_entity)
         helper_ok = (
-            self.hass.states.is_state(self._helper, "on")  # True → boolean ON
-            if self._helper
-            else True                                       # no helper → ignore
+            self.hass.states.is_state(self._helper, "on") if self._helper else True
         )
 
         if src and helper_ok:
+            # mirror the real tracker (lat, lon, state)
             self._lat = src.attributes.get("latitude")
             self._lon = src.attributes.get("longitude")
-            super()._update(_event)              # mirrors tracker state
+            super()._update(_event)              # sets _state etc.
         else:
-            # force NOT_HOME when helper is off or tracker unknown
+            # treat as away
             self._state = "not_home"
             self._lat = self._lon = None
             self.async_write_ha_state()

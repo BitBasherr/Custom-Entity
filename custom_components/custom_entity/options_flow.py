@@ -14,6 +14,8 @@ from .const import (
     CONF_COMBINE_ENTITY,
     CONF_COMBINE_ATTR_NAME,
     CONF_HYPHENATE_STATE,
+    CONF_PRESENCE_HELPER,  # <-- Added missing constant
+    SELECT_ANY_ENTITY,      # <-- Added missing selector
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,6 +41,13 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 self._opts.pop(CONF_BATTERY_ENTITY, None)
 
             # combine toggle + hyphenate flag
+            # helper boolean (optional)
+            if user_input.get(CONF_PRESENCE_HELPER):
+                self._opts[CONF_PRESENCE_HELPER] = user_input[CONF_PRESENCE_HELPER]
+            else:
+                self._opts.pop(CONF_PRESENCE_HELPER, None)
+
+            # combine toggle + hyphenate flag
             self._opts[CONF_COMBINE] = user_input.get(CONF_COMBINE, False)
             self._opts[CONF_HYPHENATE_STATE] = user_input.get(CONF_HYPHENATE_STATE, False)
 
@@ -52,6 +61,9 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(CONF_BATTERY_ENTITY, default=self._opts.get(CONF_BATTERY_ENTITY)): ENTITY_SENSOR,
                 vol.Required(CONF_COMBINE, default=self._opts.get(CONF_COMBINE, False)): bool,
                 vol.Optional(CONF_HYPHENATE_STATE, default=self._opts.get(CONF_HYPHENATE_STATE, False)): bool,
+                # show helper only if this entry is a tracker
+                vol.Optional(CONF_PRESENCE_HELPER, default=self._opts.get(CONF_PRESENCE_HELPER)):
+                    SELECT_ANY_ENTITY
             }),
         )
 
