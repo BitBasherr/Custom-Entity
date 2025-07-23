@@ -17,6 +17,7 @@ from .const import (
     CONF_COMBINE_ENTITY,
     CONF_COMBINE_ATTR_NAME,
     CONF_HYPHENATE_STATE,
+    CONF_PRESENCE_HELPER,  # <-- Added missing constant
 )
 
 PLATFORM_OPTIONS = [
