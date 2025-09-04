@@ -64,6 +64,23 @@ class CustomBaseEntity:
         # runtime
         self._state: Any = None
         self._extra_attrs: Dict[str, Any] = {}
+        self._unsub = None
+
+    # ───────────────────────────── entity API ─────────────────────────────
+    @property
+    def available(self) -> bool:
+        """Report availability based on computed state."""
+        return self._state != "unavailable"
+
+    @property
+    def state(self) -> Any:
+        """Current state shown in HA (mirrors source + optional hyphenated combine)."""
+        return self._state
+
+    @property
+    def extra_state_attributes(self) -> Dict[str, Any]:
+        """Default attributes; platform classes may override but can use this."""
+        return self._extra_attrs
 
     # ─────────────────────────── lifecycle ────────────────────────────
     async def async_added_to_hass(self) -> None:
@@ -94,7 +111,7 @@ class CustomBaseEntity:
 
     async def async_will_remove_from_hass(self) -> None:
         """Unsubscribe listeners."""
-        if hasattr(self, "_unsub") and self._unsub:
+        if self._unsub:
             self._unsub()
             self._unsub = None
 
