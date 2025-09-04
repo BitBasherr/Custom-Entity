@@ -73,6 +73,12 @@ class CustomBaseEntity:
         self._lat: Optional[float] = None
         self._lon: Optional[float] = None
 
+    # ---------- Back-compat shim ----------
+    @property
+    def entry(self):
+        """Compatibility alias for older platform files that used self.entry."""
+        return self._entry
+
     # ----------------------- Precision helpers -----------------------
 
     def _label_precision(self) -> int:

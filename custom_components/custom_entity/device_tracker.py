@@ -1,54 +1,63 @@
-"""Device Tracker platform for Custom Entity (back-compat unique_id & presence gating)."""
+"""Device Tracker platform for Custom Entity."""
 from __future__ import annotations
 
-from typing import Any
-
-from homeassistant.components.device_tracker import TrackerEntity, SourceType
+from homeassistant.components.device_tracker import DeviceTrackerEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, State, callback
+from homeassistant.core import HomeAssistant
 
+from .const import (
+    CONF_FRIENDLY_NAME,
+    CONF_PRESENCE_HELPER,
+)
 from .entity_base import CustomBaseEntity
-from .const import CONF_PRESENCE_HELPER
 
-def _truthy_on(val: str | None) -> bool:
-    if val is None:
-        return False
-    s = str(val).strip().lower()
-    return s in ("on", "home", "open", "true", "1")
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
-    if entry.data.get("platform") == "device_tracker":
-        async_add_entities([CustomTrackerEntity(hass, entry)])
+    """Set up the Custom Entity device_tracker platform."""
+    async_add_entities([CustomTrackerEntity(hass, entry)])
 
-class CustomTrackerEntity(CustomBaseEntity, TrackerEntity):
-    """Mirror a device_tracker with optional hyphenated label and presence gating."""
+
+class CustomTrackerEntity(CustomBaseEntity, DeviceTrackerEntity):
+    """Mirrors a source entity's lat/lon; optional presence helper metadata."""
 
     _attr_should_poll = False
+    _attr_has_entity_name = False  # we already set a friendly name
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        super().__init__(hass, entry)
-        # BACK-COMPAT: keep the old unique_id exactly the entry_id so entity_id doesn't change
-        self._attr_unique_id = entry.entry_id
-        self._presence_helper_entity: str | None = self.entry.options.get(CONF_PRESENCE_HELPER) or self.entry.data.get(CONF_PRESENCE_HELPER)
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
+        DeviceTrackerEntity.__init__(self)
+        CustomBaseEntity.__init__(self, hass, entry)
+        self._attr_name = entry.data.get(CONF_FRIENDLY_NAME, "Custom Tracker")
+        # Presence helper is optional and may live in options or legacy data
+        self._presence_helper_entity: str | None = (
+            (entry.options or {}).get(CONF_PRESENCE_HELPER)
+            or (entry.data or {}).get(CONF_PRESENCE_HELPER)
+        )
+
+    # ---- DeviceTrackerEntity requirements ----
+    @property
+    def unique_id(self) -> str:
+        return self._attr_unique_id
 
     @property
-    def source_type(self) -> SourceType | None:
-        return SourceType.GPS
+    def source_type(self):
+        # Using a plain string keeps compatibility across HA versions
+        return "gps"
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        return self._extra_attrs
+    def latitude(self):
+        return self._lat
 
-    @callback
-    def _update(self, _event) -> None:
-        """Base recompute then apply presence gating for 'home'."""
-        super()._update(_event)
+    @property
+    def longitude(self):
+        return self._lon
 
-        helper_id = self._presence_helper_entity
-        if not helper_id:
-            return
-
-        helper: State | None = self.hass.states.get(helper_id)
-        if not _truthy_on(helper.state if helper else None):
-            self._state = "not_home"
-            self.async_write_ha_state()
+    # Optional: pass-through any extra attributes from the base,
+    # plus expose the presence helper state (if configured) for visibility.
+    @property
+    def extra_state_attributes(self):
+        attrs = super().extra_state_attributes or {}
+        if self._presence_helper_entity:
+            st = self.hass.states.get(self._presence_helper_entity)
+            if st is not None:
+                attrs["presence_helper_state"] = st.state
+        return attrs
