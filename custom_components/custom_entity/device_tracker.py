@@ -1,67 +1,54 @@
-from homeassistant.components.device_tracker import TrackerEntity, SourceType
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.config_entries import ConfigEntry
-from .entity_base import CustomBaseEntity
-from .const import CONF_HYPHENATE_STATE, CONF_PRESENCE_HELPER
+"""Device Tracker platform for Custom Entity (back-compat unique_id & presence gating)."""
+from __future__ import annotations
 
+from typing import Any
+
+from homeassistant.components.device_tracker import TrackerEntity, SourceType
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant, State, callback
+
+from .entity_base import CustomBaseEntity
+from .const import CONF_PRESENCE_HELPER
+
+def _truthy_on(val: str | None) -> bool:
+    if val is None:
+        return False
+    s = str(val).strip().lower()
+    return s in ("on", "home", "open", "true", "1")
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
     if entry.data.get("platform") == "device_tracker":
         async_add_entities([CustomTrackerEntity(hass, entry)])
 
-
 class CustomTrackerEntity(CustomBaseEntity, TrackerEntity):
-    """Mirror tracker with optional hyphen-state."""
+    """Mirror a device_tracker with optional hyphenated label and presence gating."""
 
-    def __init__(self, hass: HomeAssistant, entry):
+    _attr_should_poll = False
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__(hass, entry)
-        self._attr_source_type = SourceType.GPS
-        self._lat: float | None = None
-        self._lon: float | None = None
-        # helper boolean (may be None for legacy configs)
-        self._helper = (
-            self._entry.options.get(CONF_PRESENCE_HELPER)
-            if self._entry.options
-            else self._entry.data.get(CONF_PRESENCE_HELPER)
-        )
-
-    # -------- base Tracker props (cached by entity_base) -------------
-    @property
-    def latitude(self):
-        return self._lat
+        # BACK-COMPAT: keep the old unique_id exactly the entry_id so entity_id doesn't change
+        self._attr_unique_id = entry.entry_id
+        self._presence_helper_entity: str | None = self.entry.options.get(CONF_PRESENCE_HELPER) or self.entry.data.get(CONF_PRESENCE_HELPER)
 
     @property
-    def longitude(self):
-        return self._lon
+    def source_type(self) -> SourceType | None:
+        return SourceType.GPS
 
-    # -------- force HA to show the hyphenated _state when requested --
     @property
-    def state(self):
-        hyphen = (
-            self._entry.options.get(CONF_HYPHENATE_STATE)
-            if self._entry.options
-            else self._entry.data.get(CONF_HYPHENATE_STATE, False)
-        )
-        if hyphen:
-            return self._state          # e.g. "Pastushoks - 12"
-        # fall back to TrackerEntity logic (zone engine)
-        return super().state
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._extra_attrs
 
-    # -------- cache lat/lon early, then run shared update ------------
     @callback
-    def _update(self, _event):
-        src = self.hass.states.get(self._source_entity)
-        helper_ok = (
-            self.hass.states.is_state(self._helper, "on") if self._helper else True
-        )
+    def _update(self, _event) -> None:
+        """Base recompute then apply presence gating for 'home'."""
+        super()._update(_event)
 
-        if src and helper_ok:
-            # mirror the real tracker (lat, lon, state)
-            self._lat = src.attributes.get("latitude")
-            self._lon = src.attributes.get("longitude")
-            super()._update(_event)              # sets _state etc.
-        else:
-            # treat as away
+        helper_id = self._presence_helper_entity
+        if not helper_id:
+            return
+
+        helper: State | None = self.hass.states.get(helper_id)
+        if not _truthy_on(helper.state if helper else None):
             self._state = "not_home"
-            self._lat = self._lon = None
             self.async_write_ha_state()

@@ -1,4 +1,4 @@
-"""Config flow for Custom Entity."""
+"""Config flow for Custom Entity (wizard-style, backward compatible)."""
 from __future__ import annotations
 
 import voluptuous as vol
@@ -8,8 +8,9 @@ from homeassistant.helpers.selector import selector
 
 from .const import (
     DOMAIN,
-    CONF_SOURCE_ENTITY,
+    SUPPORTED_PLATFORMS,
     CONF_PLATFORM,
+    CONF_SOURCE_ENTITY,
     CONF_FRIENDLY_NAME,
     CONF_DEVICE_CLASS,
     CONF_INHERIT_ATTRS,
@@ -17,138 +18,160 @@ from .const import (
     CONF_COMBINE_ENTITY,
     CONF_COMBINE_ATTR_NAME,
     CONF_HYPHENATE_STATE,
-    CONF_PRESENCE_HELPER,  # <-- Added missing constant
+    CONF_PRESENCE_HELPER,
+    SELECT_ANY_ENTITY,
+    SELECT_SENSOR,
 )
 
-PLATFORM_OPTIONS = [
-    "sensor", "binary_sensor", "switch", "number", "text", "light",
-    "device_tracker", "select", "button", "climate"
-]
-
+# Optional curated device classes per platform (extend as you like).
 DEVICE_CLASSES = {
-    "sensor": ["temperature", "humidity", "energy", "voltage", "power", "battery", "timestamp"],
-    "binary_sensor": ["motion", "occupancy", "opening", "smoke", "sound", "vibration"],
+    "sensor": [
+        "temperature", "humidity", "energy", "voltage",
+        "power", "battery", "timestamp"
+    ],
+    "binary_sensor": [
+        "motion", "occupancy", "opening", "smoke",
+        "sound", "vibration"
+    ],
+    # Add "light", "switch", etc., if you want guided picks there too.
 }
 
-SELECT_ANY_ENTITY = selector({"entity": {}})
-SELECT_SENSOR = selector({"entity": {"domain": "sensor"}})
 
-
-class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Wizard‐style config flow with optional combine."""
+class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[misc]
+    """Wizard‐style config flow with presence helper, inherit attrs, and combine."""
 
     VERSION = 1
 
-    # ── STEP 1 ── platform • name • source
+    def __init__(self) -> None:
+        self._data: dict = {}
+
+    # ───────────────────────────── STEP 1 ─────────────────────────────
+    # platform • friendly name • source entity • (optional) presence helper
     async def async_step_user(self, user_input=None):
         if user_input is not None:
+            platform = user_input[CONF_PLATFORM]
+            friendly = (user_input.get(CONF_FRIENDLY_NAME) or "").strip()
+            source = user_input[CONF_SOURCE_ENTITY]
+            presence = user_input.get(CONF_PRESENCE_HELPER)
+
             self._data = {
-                CONF_PLATFORM:      user_input[CONF_PLATFORM],
-                CONF_FRIENDLY_NAME: user_input[CONF_FRIENDLY_NAME],
-                CONF_SOURCE_ENTITY: user_input[CONF_SOURCE_ENTITY],
-                CONF_PRESENCE_HELPER: user_input.get(CONF_PRESENCE_HELPER),
+                CONF_PLATFORM: platform,
+                CONF_FRIENDLY_NAME: friendly,
+                CONF_SOURCE_ENTITY: source,
             }
-            self._data = {
-                CONF_PLATFORM:      user_input[CONF_PLATFORM],
-                CONF_FRIENDLY_NAME: user_input[CONF_FRIENDLY_NAME],
-                CONF_SOURCE_ENTITY: user_input[CONF_SOURCE_ENTITY],
-                CONF_PRESENCE_HELPER: user_input.get(CONF_PRESENCE_HELPER),
-            }
+            if presence:
+                self._data[CONF_PRESENCE_HELPER] = presence
+
+            # Unique per (platform, source) to avoid dup entries
+            await self.async_set_unique_id(f"{platform}:{source}")
+            self._abort_if_unique_id_configured()
+
             return await self.async_step_device_class()
 
-        return self.async_show_form(
-            step_id="user",
-            data_schema=vol.Schema({
-                vol.Required(CONF_PLATFORM): selector({
-                    "select": {"options": PLATFORM_OPTIONS, "mode": "dropdown"}
-                }),
-                vol.Required(CONF_FRIENDLY_NAME): str,
-                vol.Required(CONF_SOURCE_ENTITY): SELECT_ANY_ENTITY,
-                # NEW field – only shown when platform == device_tracker
-                vol.Optional(CONF_PRESENCE_HELPER): SELECT_ANY_ENTITY,
-            }),
-        )
+        # Platform selector uses the supported list from const to avoid drift.
+        platform_select = selector({
+            "select": {"options": SUPPORTED_PLATFORMS, "mode": "dropdown"}
+        })
 
-    # ── STEP 2 ── device class (if any)
+        # Presence helper shown here (even if not a tracker) for simplicity.
+        # If platform != device_tracker it's harmless to leave unset.
+        schema = vol.Schema({
+            vol.Required(CONF_PLATFORM): platform_select,
+            vol.Required(CONF_FRIENDLY_NAME): str,
+            vol.Required(CONF_SOURCE_ENTITY): SELECT_ANY_ENTITY,
+            vol.Optional(CONF_PRESENCE_HELPER): SELECT_ANY_ENTITY,
+        })
+        return self.async_show_form(step_id="user", data_schema=schema)
+
+    # ───────────────────────────── STEP 2 ─────────────────────────────
+    # device class (if applicable for the chosen platform)
     async def async_step_device_class(self, user_input=None):
         platform = self._data[CONF_PLATFORM]
         class_opts = DEVICE_CLASSES.get(platform, [])
 
         if user_input is not None:
-            self._data[CONF_DEVICE_CLASS] = user_input.get(CONF_DEVICE_CLASS)
+            device_class = (user_input.get(CONF_DEVICE_CLASS) or "").strip()
+            self._data[CONF_DEVICE_CLASS] = device_class or None
             return await self.async_step_inherit_attrs()
 
         if not class_opts:
+            # No curated list for this platform; skip cleanly
             self._data[CONF_DEVICE_CLASS] = None
             return await self.async_step_inherit_attrs()
 
-        return self.async_show_form(
-            step_id="device_class",
-            data_schema=vol.Schema({
-                vol.Optional(CONF_DEVICE_CLASS): selector({
-                    "select": {"options": class_opts, "mode": "dropdown"}
-                })
-            }),
-        )
+        schema = vol.Schema({
+            vol.Optional(CONF_DEVICE_CLASS): selector({
+                "select": {"options": class_opts, "mode": "dropdown"}
+            })
+        })
+        return self.async_show_form(step_id="device_class", data_schema=schema)
 
-    # ── STEP 3 ── attributes to mirror
+    # ───────────────────────────── STEP 3 ─────────────────────────────
+    # attributes to mirror (BACK-COMPAT: list-of-strings like you had before)
     async def async_step_inherit_attrs(self, user_input=None):
         if user_input is not None:
+            # Store list (possibly empty) to preserve old behavior.
             self._data[CONF_INHERIT_ATTRS] = user_input.get(CONF_INHERIT_ATTRS, [])
             return await self.async_step_combine_toggle()
 
-        state = self.hass.states.get(self._data[CONF_SOURCE_ENTITY])
-        attrs = list(state.attributes) if state else []
+        # Offer current source attributes as choices (if entity exists now)
+        attrs = []
+        st = self.hass.states.get(self._data[CONF_SOURCE_ENTITY])
+        if st and isinstance(st.attributes, dict):
+            attrs = sorted([str(k) for k in st.attributes.keys()])
 
-        return self.async_show_form(
-            step_id="inherit_attrs",
-            data_schema=vol.Schema({
-                vol.Optional(CONF_INHERIT_ATTRS): selector({
-                    "select": {
-                        "options": attrs,
-                        "multiple": True,
-                        "mode": "dropdown",
-                    }
-                })
-            }),
-        )
+        schema = vol.Schema({
+            vol.Optional(CONF_INHERIT_ATTRS): selector({
+                "select": {
+                    "options": attrs,
+                    "multiple": True,
+                    "mode": "dropdown"
+                }
+            })
+        })
+        return self.async_show_form(step_id="inherit_attrs", data_schema=schema)
 
-    # ── STEP 4 ── yes/no combine
+    # ───────────────────────────── STEP 4 ─────────────────────────────
+    # yes/no combine toggle (store in data for back-compat)
     async def async_step_combine_toggle(self, user_input=None):
         if user_input is not None:
-            if user_input.get(CONF_COMBINE):
+            do_combine: bool = bool(user_input.get(CONF_COMBINE, False))
+            if do_combine:
                 return await self.async_step_combine()
             self._data[CONF_COMBINE] = False
-            return self.async_create_entry(title=self._data[CONF_FRIENDLY_NAME], data=self._data)
+            title = self._data.get(CONF_FRIENDLY_NAME) or f"{self._data[CONF_PLATFORM]} • {self._data[CONF_SOURCE_ENTITY]}"
+            return self.async_create_entry(title=title, data=self._data)
 
-        return self.async_show_form(
-            step_id="combine_toggle",
-            data_schema=vol.Schema({
-                vol.Required(CONF_COMBINE, default=False): bool,
-            }),
-        )
+        schema = vol.Schema({
+            vol.Required(CONF_COMBINE, default=False): bool
+        })
+        return self.async_show_form(step_id="combine_toggle", data_schema=schema)
 
-    # ── STEP 5 ── combine details + hyphenate
+    # ───────────────────────────── STEP 5 ─────────────────────────────
+    # combine details (entity, attr name) + hyphenate boolean (store in data)
     async def async_step_combine(self, user_input=None):
         if user_input is not None:
+            combine_entity = user_input[CONF_COMBINE_ENTITY]
+            combine_attr_name = (user_input.get(CONF_COMBINE_ATTR_NAME) or "").strip()
+            hyphen = bool(user_input.get(CONF_HYPHENATE_STATE, False))
+
             self._data.update({
-                CONF_COMBINE:           True,
-                CONF_COMBINE_ENTITY:    user_input[CONF_COMBINE_ENTITY],
-                CONF_COMBINE_ATTR_NAME: user_input[CONF_COMBINE_ATTR_NAME],
-                CONF_HYPHENATE_STATE:   user_input.get(CONF_HYPHENATE_STATE, False),
+                CONF_COMBINE: True,
+                CONF_COMBINE_ENTITY: combine_entity,
+                CONF_COMBINE_ATTR_NAME: combine_attr_name,
+                CONF_HYPHENATE_STATE: hyphen,
             })
-            return self.async_create_entry(title=self._data[CONF_FRIENDLY_NAME], data=self._data)
+            title = self._data.get(CONF_FRIENDLY_NAME) or f"{self._data[CONF_PLATFORM]} • {self._data[CONF_SOURCE_ENTITY]}"
+            return self.async_create_entry(title=title, data=self._data)
 
-        return self.async_show_form(
-            step_id="combine",
-            data_schema=vol.Schema({
-                vol.Required(CONF_COMBINE_ENTITY): SELECT_SENSOR,
-                vol.Required(CONF_COMBINE_ATTR_NAME): str,
-                vol.Optional(CONF_HYPHENATE_STATE, default=False): bool,
-            }),
-        )
+        schema = vol.Schema({
+            vol.Required(CONF_COMBINE_ENTITY): SELECT_SENSOR,
+            vol.Required(CONF_COMBINE_ATTR_NAME): str,
+            vol.Optional(CONF_HYPHENATE_STATE, default=False): bool,
+        })
+        return self.async_show_form(step_id="combine", data_schema=schema)
 
-    # ── expose Options flow ──
+    # ───────────────────────── Options flow hook ───────────────────────
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
