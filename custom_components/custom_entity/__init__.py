@@ -1,9 +1,10 @@
 """Init for Custom Entity integration (with entry migration and Options→Data bridge)."""
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Iterable, Optional
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.typing import ConfigType
 
@@ -26,6 +27,28 @@ from .const import (
 )
 
 CONFIG_ENTRY_VERSION = 2  # bump when we migrate formats
+
+# Map string platform names to HA Platform enums (forward/unload expects enums)
+_PLATFORM_ENUM: Dict[str, Platform] = {
+    "sensor": Platform.SENSOR,
+    "binary_sensor": Platform.BINARY_SENSOR,
+    "number": Platform.NUMBER,
+    "switch": Platform.SWITCH,
+    "device_tracker": Platform.DEVICE_TRACKER,
+    "light": Platform.LIGHT,
+    "climate": Platform.CLIMATE,
+    "select": Platform.SELECT,
+    "text": Platform.TEXT,
+    "button": Platform.BUTTON,
+}
+
+
+def _enum_for_platform(name: Optional[str]) -> list[Platform]:
+    """Return a single-element list with the Platform enum if supported, else []"""
+    if not name:
+        return []
+    plat = _PLATFORM_ENUM.get(name)
+    return [plat] if plat else []
 
 
 async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
@@ -71,9 +94,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {"entry": entry}
 
-    platform = entry.data.get(CONF_PLATFORM)
-    if platform in SUPPORTED_PLATFORMS:
-        await hass.config_entries.async_forward_entry_setups(entry, [platform])
+    # Only forward the one platform chosen for this entry
+    platforms = _enum_for_platform(entry.data.get(CONF_PLATFORM))
+    if platforms:
+        await hass.config_entries.async_forward_entry_setups(entry, platforms)
 
     async def _on_update(hass: HomeAssistant, entry: ConfigEntry):
         """
@@ -103,16 +127,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a single Custom Entity entry."""
-    platform = entry.data.get(CONF_PLATFORM)
+    platforms = _enum_for_platform(entry.data.get(CONF_PLATFORM))
     unload_ok = True
-    if platform in SUPPORTED_PLATFORMS:
-        unload_ok = await hass.config_entries.async_unload_platforms(entry, [platform])
+    if platforms:
+        unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
     if unload_ok:
         hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     return unload_ok
 
 
-# Options flow bridge
+# Options flow bridge (so HA can find the OptionsFlow without importing config_flow first)
 async def async_get_options_flow(config_entry: ConfigEntry):
     from .options_flow import CustomEntityOptionsFlow
     return CustomEntityOptionsFlow(config_entry)

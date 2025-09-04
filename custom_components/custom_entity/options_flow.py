@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
+from homeassistant.helpers.selector import selector  # ✅ FIX: import selector
 
 from .const import (
     # data keys
@@ -73,7 +74,6 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
 
         # Back-compat: migrate old single precision to new label precision (in-memory)
         if CONF_COMBINE_PRECISION in self._opts and CONF_COMBINE_LABEL_PRECISION not in self._opts:
-            # Old value may already be int; keep it, but we'll present strings in the UI
             self._opts[CONF_COMBINE_LABEL_PRECISION] = self._opts.get(
                 CONF_COMBINE_PRECISION, DEFAULT_COMBINE_PRECISION
             )
@@ -127,7 +127,6 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             vol.Required(CONF_FRIENDLY_NAME, default=data_now.get(CONF_FRIENDLY_NAME, "")): vol.Coerce(str),
             vol.Required(CONF_SOURCE_ENTITY, default=data_now.get(CONF_SOURCE_ENTITY, "")): SELECT_ANY_ENTITY,
             vol.Optional(CONF_DEVICE_CLASS, default=data_now.get(CONF_DEVICE_CLASS, "")): (
-                # If we know classes, show a list; else a text field.
                 selector({"select": {"options": class_opts, "mode": "list"}}) if class_opts
                 else selector({"text": {}})
             ),
@@ -193,19 +192,14 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(step_id="combine", data_schema=schema)
 
     # ========= Precision (OPTIONS) =========
-    # UI shows string values "0","1","2","3"; we coerce to int for storage.
-    # • Label precision = decimals used when Hyphenate is ON (value appended to the label).
-    # • Attribute precision = decimals used when Hyphenate is OFF (value written to attribute).
     async def async_step_precision(self, user_input=None):
         opts = self._opts
 
-        # Build string defaults for the select control
         def _str_default(k: str, fallback: int) -> str:
             v = opts.get(k, fallback)
             try:
                 return str(int(v))
             except Exception:
-                # if anything weird was stored, fall back safely
                 return str(fallback)
 
         schema = vol.Schema({
@@ -213,7 +207,6 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=_str_default(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
         })
         if user_input is not None:
-            # Incoming values are strings (per select schema) — coerce to int for storage
             lbl_str = user_input.get(CONF_COMBINE_LABEL_PRECISION, str(DEFAULT_COMBINE_PRECISION))
             attr_str = user_input.get(CONF_COMBINE_ATTR_PRECISION, str(DEFAULT_COMBINE_PRECISION))
             try:
@@ -224,7 +217,6 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 self._opts[CONF_COMBINE_ATTR_PRECISION] = int(attr_str)
             except Exception:
                 self._opts[CONF_COMBINE_ATTR_PRECISION] = DEFAULT_COMBINE_PRECISION
-
             return await self.async_step_menu()
 
         return self.async_show_form(step_id="precision", data_schema=schema)
