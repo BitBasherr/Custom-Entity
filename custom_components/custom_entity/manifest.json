@@ -1,11 +1,13 @@
 {
   "domain": "custom_entity",
   "name": "Custom Entity",
+  "version": "2025.9.3.dev0",
   "documentation": "https://github.com/BitBasherr/Custom-Entity",
   "issue_tracker": "https://github.com/BitBasherr/Custom-Entity/issues",
   "config_flow": true,
-  "iot_class": "local_polling",
+  "iot_class": "local_push",
+  "integration_type": "helper",
   "requirements": [],
-  "dependencies": [],
-  "codeowners": ["@BitBasherr"]
+  "codeowners": ["@BitBasherr"],
+  "loggers": ["custom_components.custom_entity"]
 }
