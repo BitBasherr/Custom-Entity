@@ -20,6 +20,7 @@ from .const import (
     CONF_HYPHENATE_STATE,
     CONF_INHERIT_ATTRS,
     CONF_SOURCE_ENTITY,
+    CONF_PRESENCE_HELPER,
     DEFAULT_COMBINE_PRECISION,
 )
 
@@ -49,6 +50,9 @@ class CustomBaseEntity:
         self._combine_entity: str | None = opts.get(CONF_COMBINE_ENTITY)
         self._combine_attr_name: str | None = opts.get(CONF_COMBINE_ATTR_NAME)
         self._hyphenate: bool = bool(opts.get(CONF_HYPHENATE_STATE, False))
+
+        # Presence helper (boolean-ish entity used by tracker to allow 'home')
+        self._presence_helper: str | None = opts.get(CONF_PRESENCE_HELPER)
 
         # Precision (label + attribute). Keep legacy combine_precision for label.
         self._label_precision: int = int(
@@ -95,6 +99,9 @@ class CustomBaseEntity:
 
         for ent in self._extra_map.values():
             ent_ids.add(ent)
+
+        if self._presence_helper:
+            ent_ids.add(self._presence_helper)
 
         # Listen once for all and update on any change
         self._unsub = async_track_state_change_event(
@@ -186,5 +193,5 @@ class CustomBaseEntity:
                         co.state, self._attr_precision
                     )
 
-        # Single write
+        # Single write (platforms may override _update to post-process)
         self.async_write_ha_state()
