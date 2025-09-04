@@ -11,6 +11,14 @@ CONF_SOURCE_ENTITY = "source_entity"
 CONF_DEVICE_CLASS = "device_class"
 CONF_INHERIT_ATTRS = "inherit_attrs"
 
+# --- Sensor modes (only for the sensor platform)
+CONF_SENSOR_MODE = "sensor_mode"            # "mirror" | "person_label"
+SENSOR_MODE_MIRROR = "mirror"
+SENSOR_MODE_PERSON_LABEL = "person_label"
+CONF_PERSON_ENTITY = "person_entity"        # person.<id>
+CONF_LABEL_ATTR = "label_attr"              # attribute on tracker to label with
+DEFAULT_LABEL_ATTR = "address"
+
 # ---------------- Optional features (stored in entry.options) ------------
 CONF_BATTERY_ENTITY = "battery_entity"
 CONF_ATTRIBUTE_SENSORS = "attribute_sensors"  # mapping: {friendly_name: entity_id}
@@ -67,7 +75,9 @@ DEVICE_CLASSES = {
 
 # ---------------- Selectors (UI helpers) ---------------------------------
 SELECT_ANY_ENTITY = selector({"entity": {}})
-SELECT_SENSOR = selector({"entity": {"domain": "sensor"}})  # for config_flow paths that still want sensors only
+SELECT_SENSOR = selector({"entity": {"domain": "sensor"}})
+SELECT_PERSON = selector({"entity": {"domain": "person"}})
+SELECT_DEVICE_TRACKER = selector({"entity": {"domain": "device_tracker"}})
 
 # Precision choices (string values satisfy HA's SelectSelector validation)
 PRECISION_OPTIONS = [
@@ -92,4 +102,8 @@ DATA_MUTABLE_KEYS = {
     CONF_SOURCE_ENTITY,
     CONF_DEVICE_CLASS,
     CONF_INHERIT_ATTRS,
+    # NEW keys used by the Person Label sensor mode
+    CONF_SENSOR_MODE,
+    CONF_PERSON_ENTITY,
+    CONF_LABEL_ATTR,
 }

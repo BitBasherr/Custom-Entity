@@ -27,7 +27,22 @@ from .const import (
     CONF_COMBINE_LABEL_PRECISION,
     CONF_COMBINE_ATTR_PRECISION,
     DEFAULT_COMBINE_PRECISION,
+    # NEW: person-label support
+    CONF_SENSOR_MODE,
+    SENSOR_MODE_MIRROR,
+    SENSOR_MODE_PERSON_LABEL,
+    CONF_PERSON_ENTITY,
+    CONF_LABEL_ATTR,
+    DEFAULT_LABEL_ATTR,
+    SELECT_PERSON,
+    SELECT_DEVICE_TRACKER,
 )
+
+SENSOR_MODE_OPTIONS = [
+    {"label": "Mirror (default)", "value": SENSOR_MODE_MIRROR},
+    {"label": "Person Label (sensor)", "value": SENSOR_MODE_PERSON_LABEL},
+]
+
 
 def _guess_device_class(hass, entity_id: str) -> str | None:
     st = hass.states.get(entity_id)
@@ -49,9 +64,10 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # Normalize to strings
             platform = str(user_input[CONF_PLATFORM])
             friendly = str(user_input[CONF_FRIENDLY_NAME])
-            source = str(user_input[CONF_SOURCE_ENTITY])
+            source = str(user_input.get(CONF_SOURCE_ENTITY) or "")
             presence = user_input.get(CONF_PRESENCE_HELPER)
             presence = str(presence) if presence else None
+            sensor_mode = user_input.get(CONF_SENSOR_MODE, SENSOR_MODE_MIRROR)
 
             data = {
                 CONF_PLATFORM: platform,
@@ -62,6 +78,13 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # Optional presence helper (meaningful mostly for device_tracker)
             if presence:
                 data[CONF_PRESENCE_HELPER] = presence
+
+            # For sensor platform we allow an explicit mode
+            if platform == "sensor":
+                data[CONF_SENSOR_MODE] = sensor_mode
+                if sensor_mode == SENSOR_MODE_PERSON_LABEL:
+                    self._data = data
+                    return await self.async_step_person_label_details()
 
             # Pre-fill device_class if that platform supports it
             if platform in PLATFORMS_WITH_DEVICE_CLASS:
@@ -78,10 +101,30 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_PLATFORM): selector({"select": {
                     "options": SUPPORTED_PLATFORMS, "mode": "dropdown"}}),
                 vol.Required(CONF_FRIENDLY_NAME): str,
-                vol.Required(CONF_SOURCE_ENTITY): SELECT_ANY_ENTITY,
+                vol.Optional(CONF_SOURCE_ENTITY): SELECT_ANY_ENTITY,
                 vol.Optional(CONF_PRESENCE_HELPER): SELECT_ANY_ENTITY,
+                # NEW (only used if platform == sensor)
+                vol.Optional(CONF_SENSOR_MODE, default=SENSOR_MODE_MIRROR): selector({
+                    "select": {"options": SENSOR_MODE_OPTIONS, "mode": "list"}
+                }),
             }),
         )
+
+    async def async_step_person_label_details(self, user_input=None):
+        """Only when platform=sensor and sensor_mode=person_label."""
+        if user_input is not None:
+            self._data[CONF_PERSON_ENTITY] = str(user_input[CONF_PERSON_ENTITY])
+            # If source entity wasn't provided earlier, require a device_tracker now
+            self._data[CONF_SOURCE_ENTITY] = str(user_input.get(CONF_SOURCE_ENTITY) or user_input["tracker_entity"])
+            self._data[CONF_LABEL_ATTR] = str(user_input.get(CONF_LABEL_ATTR) or DEFAULT_LABEL_ATTR).strip()
+            return await self.async_step_inherit_attrs()
+
+        schema = vol.Schema({
+            vol.Required(CONF_PERSON_ENTITY): SELECT_PERSON,
+            vol.Optional("tracker_entity", default=self._data.get(CONF_SOURCE_ENTITY, "")): SELECT_DEVICE_TRACKER,
+            vol.Optional(CONF_LABEL_ATTR, default=DEFAULT_LABEL_ATTR): str,
+        })
+        return self.async_show_form(step_id="person_label_details", data_schema=schema)
 
     async def async_step_inherit_attrs(self, user_input=None):
         if user_input is not None:
@@ -92,7 +135,7 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_combine()
 
         attrs = []
-        st = self.hass.states.get(self._data[CONF_SOURCE_ENTITY])
+        st = self.hass.states.get(self._data.get(CONF_SOURCE_ENTITY))
         if st:
             attrs = list(st.attributes.keys())
 
@@ -106,6 +149,11 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_combine(self, user_input=None):
+        # Person Label sensors don't use combine; keep UI identical for back-compat
+        return await super().async_step_combine(user_input) if hasattr(super(), "async_step_combine") else self._legacy_combine(user_input)
+
+    # Original combine implementation copied from your file:
+    async def _legacy_combine(self, user_input=None):
         if user_input is not None:
             combine_on = bool(user_input.get(CONF_COMBINE, False))
             if combine_on:
@@ -170,7 +218,6 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(step_id="device_class", data_schema=schema)
 
-    # Options flow hook
     @staticmethod
     @callback
     def async_get_options_flow(config_entry):
