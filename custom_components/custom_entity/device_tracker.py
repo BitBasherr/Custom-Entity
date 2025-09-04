@@ -1,72 +1,67 @@
-"""Device Tracker platform for Custom Entity."""
-from __future__ import annotations
-
-from typing import Any
-
-from homeassistant.components.device_tracker import SourceType, TrackerEntity
+from homeassistant.components.device_tracker import TrackerEntity, SourceType
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, State, callback
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
-
 from .entity_base import CustomBaseEntity
-from .const import CONF_PRESENCE_HELPER
+from .const import CONF_HYPHENATE_STATE, CONF_PRESENCE_HELPER
 
 
-def _truthy_on(val: str | None) -> bool:
-    """Interpret common 'on' states for boolean-ish entities."""
-    if val is None:
-        return False
-    s = str(val).strip().lower()
-    return s in ("on", "home", "open", "true", "1")
-
-
-async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
-) -> None:
-    """Set up the Custom Entity device_tracker from a config entry."""
-    async_add_entities([CustomTrackerEntity(hass, entry)])
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
+    if entry.data.get("platform") == "device_tracker":
+        async_add_entities([CustomTrackerEntity(hass, entry)])
 
 
 class CustomTrackerEntity(CustomBaseEntity, TrackerEntity):
-    """A device_tracker that mirrors another entity and optionally hyphenates a combine value.
+    """Mirror tracker with optional hyphen-state."""
 
-    Presence helper behavior:
-    - If Options -> Presence helper is set AND it is OFF, force state to 'not_home'.
-    - If helper is ON or not set, pass-through state (including hyphenation if configured).
-    """
+    def __init__(self, hass: HomeAssistant, entry):
+        super().__init__(hass, entry)
+        self._attr_source_type = SourceType.GPS
+        self._lat: float | None = None
+        self._lon: float | None = None
+        # helper boolean (may be None for legacy configs)
+        self._helper = (
+            self._entry.options.get(CONF_PRESENCE_HELPER)
+            if self._entry.options
+            else self._entry.data.get(CONF_PRESENCE_HELPER)
+        )
 
-    _attr_should_poll = False  # we listen to state_changed events
-
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        CustomBaseEntity.__init__(self, hass, entry)
-        self._attr_unique_id = f"{self.entry.entry_id}-tracker"
-        # cache presence helper entity_id if configured
-        self._presence_helper_entity: str | None = entry.options.get(CONF_PRESENCE_HELPER)
+    # -------- base Tracker props (cached by entity_base) -------------
+    @property
+    def latitude(self):
+        return self._lat
 
     @property
-    def source_type(self) -> SourceType | None:
-        """Best-effort source type for UI consistency."""
-        return SourceType.GPS
+    def longitude(self):
+        return self._lon
 
+    # -------- force HA to show the hyphenated _state when requested --
     @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Expose any mirrored/combined attributes to the state machine."""
-        return self._extra_attrs
+    def state(self):
+        hyphen = (
+            self._entry.options.get(CONF_HYPHENATE_STATE)
+            if self._entry.options
+            else self._entry.data.get(CONF_HYPHENATE_STATE, False)
+        )
+        if hyphen:
+            return self._state          # e.g. "Pastushoks - 12"
+        # fall back to TrackerEntity logic (zone engine)
+        return super().state
 
+    # -------- cache lat/lon early, then run shared update ------------
     @callback
-    def _update(self, _event) -> None:
-        """Apply base recompute, then presence gating for 'home' semantics."""
-        # Run the base recompute first
-        super()._update(_event)
+    def _update(self, _event):
+        src = self.hass.states.get(self._source_entity)
+        helper_ok = (
+            self.hass.states.is_state(self._helper, "on") if self._helper else True
+        )
 
-        # Apply presence gating only if a helper was configured
-        if not self._presence_helper_entity:
-            return
-
-        helper: State | None = self.hass.states.get(self._presence_helper_entity)
-        helper_on = _truthy_on(helper.state if helper else None)
-
-        if not helper_on:
-            # If helper is OFF, we force 'not_home' (ignore hyphenation/zone strings)
+        if src and helper_ok:
+            # mirror the real tracker (lat, lon, state)
+            self._lat = src.attributes.get("latitude")
+            self._lon = src.attributes.get("longitude")
+            super()._update(_event)              # sets _state etc.
+        else:
+            # treat as away
             self._state = "not_home"
+            self._lat = self._lon = None
             self.async_write_ha_state()
