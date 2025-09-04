@@ -1,0 +1,120 @@
+{
+  "title": "Custom Entity",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Create Custom Entity",
+        "description": "Pick a platform, a source entity, and (optionally) a presence helper.",
+        "data": {
+          "platform": "Platform",
+          "friendly_name": "Friendly name",
+          "source_entity": "Source entity",
+          "presence_helper": "Presence helper (optional)"
+        }
+      },
+      "device_class": {
+        "title": "Device class",
+        "description": "Choose a device class for the selected platform (if applicable).",
+        "data": {
+          "device_class": "Device class"
+        }
+      },
+      "inherit_attrs": {
+        "title": "Mirror attributes",
+        "description": "Pick which attributes to mirror from {source}. Leave empty to mirror none.",
+        "data": {
+          "inherit_attributes": "Attributes to mirror"
+        }
+      },
+      "combine_toggle": {
+        "title": "Combine another entity?",
+        "description": "You can combine another sensor either into the state label (hyphenate) or as an extra attribute.",
+        "data": {
+          "combine": "Combine another entity?"
+        }
+      },
+      "combine": {
+        "title": "Combine settings",
+        "description": "Choose the entity to combine. If you enable Hyphenate, its value will be appended to the label.",
+        "data": {
+          "combine_entity": "Entity to combine",
+          "combine_attr_name": "Attribute name (when not hyphenating)",
+          "hyphenate_state": "Hyphenate (append to label)"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "menu": {
+        "title": "Custom Entity — Options",
+        "description": "Edit any setting, then choose **Save & apply**.",
+        "data": {
+          "choice": "Choose an action"
+        }
+      },
+      "core": {
+        "title": "Core settings",
+        "description": "Change platform, name, source, and device class.",
+        "data": {
+          "platform": "Platform",
+          "friendly_name": "Friendly name",
+          "source_entity": "Source entity",
+          "device_class": "Device class"
+        }
+      },
+      "attrs": {
+        "title": "Mirror attributes",
+        "description": "Current: {current}",
+        "data": {
+          "inherit_attributes": "Attributes to mirror"
+        }
+      },
+      "combine": {
+        "title": "Combine settings",
+        "description": "Hyphenate appends the combined value to the label. Otherwise the value is added as an attribute with your chosen name.",
+        "data": {
+          "combine": "Enable combine",
+          "combine_entity": "Entity to combine",
+          "combine_attr_name": "Attribute name (when not hyphenating)",
+          "hyphenate_state": "Hyphenate (append to label)"
+        }
+      },
+      "precision": {
+        "title": "Precision",
+        "description": "Label precision is used when Hyphenate is ON; Attribute precision is used when Hyphenate is OFF.",
+        "data": {
+          "combine_label_precision": "Label precision (for hyphenated label)",
+          "combine_attribute_precision": "Attribute precision (for attribute value)"
+        }
+      },
+      "extras": {
+        "title": "Extras",
+        "description": "Both fields are optional. Leave blank to clear.",
+        "data": {
+          "battery_entity": "Battery entity (optional)",
+          "presence_helper": "Presence helper (optional)"
+        }
+      },
+      "attr_menu": {
+        "title": "Attribute sensors",
+        "description": "Current: {current}",
+        "data": {
+          "choice": "Action"
+        }
+      },
+      "attr_pick_entity": {
+        "title": "Pick attribute entity",
+        "data": {
+          "entity": "Entity"
+        }
+      },
+      "attr_pick_name": {
+        "title": "Name this attribute",
+        "data": {
+          "name": "Friendly name for attribute"
+        }
+      }
+    }
+  }
+}

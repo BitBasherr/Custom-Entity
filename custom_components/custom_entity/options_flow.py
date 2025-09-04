@@ -1,8 +1,8 @@
-"""Options flow exposing all Config Flow capabilities + extras, with Options→Data bridge."""
+"""Options flow exposing all Config Flow capabilities + extras, with nice selectors & fixed translations."""
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import voluptuous as vol
 from homeassistant import config_entries
@@ -43,11 +43,11 @@ _LOGGER = logging.getLogger(__name__)
 DEVICE_CLASSES = {
     "sensor": [
         "temperature", "humidity", "energy", "voltage",
-        "power", "battery", "timestamp"
+        "power", "battery", "timestamp",
     ],
     "binary_sensor": [
         "motion", "occupancy", "opening", "smoke",
-        "sound", "vibration"
+        "sound", "vibration",
     ],
 }
 
@@ -55,21 +55,20 @@ DEVICE_CLASSES = {
 class CustomEntityOptionsFlow(config_entries.OptionsFlow):
     """
     Options wizard with:
-      • Core (platform*, friendly name, source entity, device class, inherit attrs list)
+      • Core (platform, friendly name, source entity, device class, inherit attrs list)
       • Combine (toggle, entity, attr name, hyphenate)
-      • Precision (label + attribute)
+      • Precision (label & attribute) with visual decimal options
       • Extras (battery, presence helper)
       • Attribute sensors add/remove
 
-    *Changing platform/source updates entry.data via an internal Options→Data bridge,
-     then reloads the entry. Unique IDs remain the same.
+    Changing Core values applies to entry.data via an internal Options→Data bridge,
+    then reloads the entry. Unique IDs remain the same.
     """
 
     def __init__(self, entry: config_entries.ConfigEntry):
         self.entry = entry
         self._opts: Dict[str, Any] = dict(entry.options or {})
         self._opts.setdefault(CONF_ATTRIBUTE_SENSORS, {})
-        # Working copy of data we want to change from options
         self._pending_data: Dict[str, Any] = {}
 
         # Back-compat: migrate old single precision to new label precision (in-memory)
@@ -77,6 +76,8 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             self._opts[CONF_COMBINE_LABEL_PRECISION] = self._opts.get(
                 CONF_COMBINE_PRECISION, DEFAULT_COMBINE_PRECISION
             )
+
+        self._pending_attr_entity: str | None = None
 
     # ========= Menu =========
     async def async_step_init(self, user_input=None):
@@ -101,12 +102,12 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 return await self._finish()
         schema = vol.Schema({
             vol.Required("choice"): vol.In({
-                "core":        "Core settings (platform, source, name, class, inherit attrs)",
-                "attrs":       "Pick attributes to mirror",
-                "combine":     "Combine settings (entity, name, hyphenate, toggle)",
-                "precision":   "Precision (label & attribute)",
-                "extras":      "Extras (battery & presence helper)",
-                "attr_sensors":"Attribute sensors (add/remove friendly → entity)",
+                "core":        "Core settings",
+                "attrs":       "Mirror attributes",
+                "combine":     "Combine settings",
+                "precision":   "Precision",
+                "extras":      "Extras",
+                "attr_sensors":"Attribute sensors",
                 "save":        "✅ Save & apply",
             })
         })
@@ -115,26 +116,24 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
     # ========= Core (DATA) =========
     async def async_step_core(self, user_input=None):
         data_now = dict(self.entry.data or {})
-        # Apply in-flight pending changes to show correct defaults
-        for k, v in self._pending_data.items():
-            data_now[k] = v
+        data_now.update(self._pending_data)  # show staged values
 
         platform_now = data_now.get(CONF_PLATFORM)
-        class_opts = DEVICE_CLASSES.get(platform_now or "", [])
+        class_opts: List[str] = DEVICE_CLASSES.get(platform_now or "", [])
+
         schema = vol.Schema({
             vol.Required(CONF_PLATFORM, default=platform_now or SUPPORTED_PLATFORMS[0]): vol.In(SUPPORTED_PLATFORMS),
-            vol.Required(CONF_FRIENDLY_NAME, default=data_now.get(CONF_FRIENDLY_NAME, "")): str,
+            vol.Required(CONF_FRIENDLY_NAME, default=data_now.get(CONF_FRIENDLY_NAME, "")): selector({"text": {}}),
             vol.Required(CONF_SOURCE_ENTITY, default=data_now.get(CONF_SOURCE_ENTITY, "")): SELECT_ANY_ENTITY,
             vol.Optional(CONF_DEVICE_CLASS, default=data_now.get(CONF_DEVICE_CLASS, "")): (
-                vol.In(class_opts) if class_opts else str
+                selector({"select": {"options": class_opts, "mode": "list"}}) if class_opts
+                else selector({"text": {}})
             ),
         })
         if user_input is not None:
-            # Stage DATA changes
             for key in (CONF_PLATFORM, CONF_FRIENDLY_NAME, CONF_SOURCE_ENTITY, CONF_DEVICE_CLASS):
                 if key in user_input and key in DATA_MUTABLE_KEYS:
                     val = user_input[key]
-                    # Normalize whitespace-only to None for device class
                     if key == CONF_DEVICE_CLASS:
                         val = (val or "").strip() or None
                     self._pending_data[key] = val
@@ -144,7 +143,6 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
 
     # ========= Inherit attributes list (DATA) =========
     async def async_step_attrs(self, user_input=None):
-        # Determine which source entity to introspect (pending override first)
         source = self._pending_data.get(CONF_SOURCE_ENTITY, self.entry.data.get(CONF_SOURCE_ENTITY))
         attrs = []
         st = self.hass.states.get(source) if source else None
@@ -153,23 +151,22 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
 
         current = self.entry.data.get(CONF_INHERIT_ATTRS, [])
         if isinstance(current, bool):
-            # If someone migrated to bool in the past, show blank list; keep list semantics
             current = []
 
         schema = vol.Schema({
             vol.Optional(CONF_INHERIT_ATTRS, default=current): selector({
-                "select": {
-                    "options": attrs,
-                    "multiple": True,
-                    "mode": "dropdown"
-                }
+                "select": {"options": attrs, "multiple": True, "mode": "list"}
             })
         })
         if user_input is not None:
             self._pending_data[CONF_INHERIT_ATTRS] = user_input.get(CONF_INHERIT_ATTRS, [])
             return await self.async_step_menu()
 
-        return self.async_show_form(step_id="attrs", data_schema=schema)
+        return self.async_show_form(
+            step_id="attrs",
+            data_schema=schema,
+            description_placeholders={"current": ", ".join(current) or "none"},
+        )
 
     # ========= Combine (OPTIONS) =========
     async def async_step_combine(self, user_input=None):
@@ -177,7 +174,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         schema = vol.Schema({
             vol.Required(CONF_COMBINE, default=bool(opts.get(CONF_COMBINE, False))): bool,
             vol.Optional(CONF_COMBINE_ENTITY, default=opts.get(CONF_COMBINE_ENTITY, "")): SELECT_SENSOR,
-            vol.Optional(CONF_COMBINE_ATTR_NAME, default=opts.get(CONF_COMBINE_ATTR_NAME, "")): str,
+            vol.Optional(CONF_COMBINE_ATTR_NAME, default=opts.get(CONF_COMBINE_ATTR_NAME, "")): selector({"text": {}}),
             vol.Optional(CONF_HYPHENATE_STATE, default=bool(opts.get(CONF_HYPHENATE_STATE, False))): bool,
         })
         if user_input is not None:
@@ -191,9 +188,16 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                     self._opts.pop(k, None)
             return await self.async_step_menu()
 
-        return self.async_show_form(step_id="combine", data_schema=schema)
+        return self.async_show_form(
+            step_id="combine",
+            data_schema=schema,
+            description_placeholders={},
+        )
 
     # ========= Precision (OPTIONS) =========
+    # Shows visual decimal options; stores ints (0,1,2,3).
+    # • Label precision: used when "Hyphenate" is ON — how many decimals to show in the label text.
+    # • Attribute precision: used when "Hyphenate" is OFF — how we round the value added to attributes.
     async def async_step_precision(self, user_input=None):
         opts = self._opts
         schema = vol.Schema({
@@ -209,13 +213,16 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             )
             return await self.async_step_menu()
 
-        return self.async_show_form(step_id="precision", data_schema=schema)
+        return self.async_show_form(
+            step_id="precision",
+            data_schema=schema,
+            description_placeholders={},
+        )
 
     # ========= Extras (battery/presence) (OPTIONS) =========
     async def async_step_extras(self, user_input=None):
         opts = self._opts
         schema = vol.Schema({
-            # Both are truly optional; leave blank to clear.
             vol.Optional(CONF_BATTERY_ENTITY, default=opts.get(CONF_BATTERY_ENTITY, "")): SELECT_ANY_ENTITY,
             vol.Optional(CONF_PRESENCE_HELPER, default=opts.get(CONF_PRESENCE_HELPER, "")): SELECT_BOOLEANISH,
         })
@@ -232,7 +239,11 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 self._opts.pop(CONF_PRESENCE_HELPER, None)
             return await self.async_step_menu()
 
-        return self.async_show_form(step_id="extras", data_schema=schema)
+        return self.async_show_form(
+            step_id="extras",
+            data_schema=schema,
+            description_placeholders={},
+        )
 
     # ========= Attribute sensors (OPTIONS) =========
     async def async_step_attr_menu(self, user_input=None):
@@ -251,10 +262,13 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             "add": "➕ Add attribute",
             **{f"del__{k}": f"🗑 Remove “{k}”" for k in sorted(self._opts.get(CONF_ATTRIBUTE_SENSORS, {}))}
         }
-        schema = vol.Schema({
-            vol.Required("choice"): vol.In(buttons)
-        })
-        return self.async_show_form(step_id="attr_menu", data_schema=schema)
+        schema = vol.Schema({vol.Required("choice"): vol.In(buttons)})
+        current = ", ".join(self._opts.get(CONF_ATTRIBUTE_SENSORS, {}).keys()) or "none"
+        return self.async_show_form(
+            step_id="attr_menu",
+            data_schema=schema,
+            description_placeholders={"current": current},
+        )
 
     async def async_step_attr_pick_entity(self, user_input=None):
         if user_input is not None:
@@ -269,20 +283,16 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 self._opts.setdefault(CONF_ATTRIBUTE_SENSORS, {})[friendly] = self._pending_attr_entity
             self._pending_attr_entity = None
             return await self.async_step_attr_menu()
-        return self.async_show_form(step_id="attr_pick_name", data_schema=vol.Schema({vol.Required("name"): str}))
+        return self.async_show_form(step_id="attr_pick_name", data_schema=vol.Schema({vol.Required("name"): selector({"text": {}})}))
 
     # ========= Finish =========
     async def _finish(self):
-        # If we staged DATA changes, encode them into the options so the
-        # update listener can apply and then clean them up.
         if self._pending_data:
             clean_data = {k: self._pending_data[k] for k in self._pending_data if k in DATA_MUTABLE_KEYS}
             if clean_data:
                 self._opts[OPT_APPLY_DATA_UPDATE] = {"data": clean_data}
-
         return self.async_create_entry(title="", data=self._opts)
 
-    # (Optional) Preview result for older HA versions
     @callback
     def async_get_result(self):
         return self._opts

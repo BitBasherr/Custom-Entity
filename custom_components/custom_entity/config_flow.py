@@ -1,4 +1,4 @@
-"""Config flow for Custom Entity (wizard-style, backward compatible)."""
+"""Config flow for Custom Entity (wizard-style, with friendly selectors & translations)."""
 from __future__ import annotations
 
 import voluptuous as vol
@@ -23,15 +23,15 @@ from .const import (
     SELECT_SENSOR,
 )
 
-# Optional curated device classes per platform (extend as you like).
+# Curated device classes per platform (extend as you like).
 DEVICE_CLASSES = {
     "sensor": [
         "temperature", "humidity", "energy", "voltage",
-        "power", "battery", "timestamp"
+        "power", "battery", "timestamp",
     ],
     "binary_sensor": [
         "motion", "occupancy", "opening", "smoke",
-        "sound", "vibration"
+        "sound", "vibration",
     ],
 }
 
@@ -61,44 +61,42 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
             if presence:
                 self._data[CONF_PRESENCE_HELPER] = presence
 
-            # Unique per (platform, source) to avoid dup entries
             await self.async_set_unique_id(f"{platform}:{source}")
             self._abort_if_unique_id_configured()
-
             return await self.async_step_device_class()
 
-        platform_select = selector({
-            "select": {"options": SUPPORTED_PLATFORMS, "mode": "dropdown"}
-        })
+        platform_select = selector({"select": {"options": SUPPORTED_PLATFORMS, "mode": "list"}})
 
         schema = vol.Schema({
             vol.Required(CONF_PLATFORM): platform_select,
-            vol.Required(CONF_FRIENDLY_NAME): str,
+            vol.Required(CONF_FRIENDLY_NAME): selector({"text": {}}),
             vol.Required(CONF_SOURCE_ENTITY): SELECT_ANY_ENTITY,
             vol.Optional(CONF_PRESENCE_HELPER): SELECT_ANY_ENTITY,
         })
         return self.async_show_form(step_id="user", data_schema=schema)
 
     # ───────────────────────────── STEP 2 ─────────────────────────────
-    # device class (if applicable for the chosen platform)
+    # device class (nice list when we know them; otherwise a clean text field)
     async def async_step_device_class(self, user_input=None):
         platform = self._data[CONF_PLATFORM]
         class_opts = DEVICE_CLASSES.get(platform, [])
 
         if user_input is not None:
+            # If list exists, selector returns one of the options; otherwise text selector returns string
             device_class = (user_input.get(CONF_DEVICE_CLASS) or "").strip()
             self._data[CONF_DEVICE_CLASS] = device_class or None
             return await self.async_step_inherit_attrs()
 
-        if not class_opts:
-            self._data[CONF_DEVICE_CLASS] = None
-            return await self.async_step_inherit_attrs()
-
-        schema = vol.Schema({
-            vol.Optional(CONF_DEVICE_CLASS): selector({
-                "select": {"options": class_opts, "mode": "dropdown"}
+        if class_opts:
+            schema = vol.Schema({
+                vol.Optional(CONF_DEVICE_CLASS): selector({
+                    "select": {"options": class_opts, "mode": "list"}
+                })
             })
-        })
+        else:
+            schema = vol.Schema({
+                vol.Optional(CONF_DEVICE_CLASS): selector({"text": {}})
+            })
         return self.async_show_form(step_id="device_class", data_schema=schema)
 
     # ───────────────────────────── STEP 3 ─────────────────────────────
@@ -109,20 +107,21 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
             return await self.async_step_combine_toggle()
 
         attrs = []
-        st = self.hass.states.get(self._data[CONF_SOURCE_ENTITY])
+        src = self._data.get(CONF_SOURCE_ENTITY)
+        st = self.hass.states.get(src) if src else None
         if st and isinstance(st.attributes, dict):
             attrs = sorted([str(k) for k in st.attributes.keys()])
 
         schema = vol.Schema({
             vol.Optional(CONF_INHERIT_ATTRS): selector({
-                "select": {
-                    "options": attrs,
-                    "multiple": True,
-                    "mode": "dropdown"
-                }
+                "select": {"options": attrs, "multiple": True, "mode": "list"}
             })
         })
-        return self.async_show_form(step_id="inherit_attrs", data_schema=schema)
+        return self.async_show_form(
+            step_id="inherit_attrs",
+            data_schema=schema,
+            description_placeholders={"source": src or ""},
+        )
 
     # ───────────────────────────── STEP 4 ─────────────────────────────
     # yes/no combine toggle (store in data for back-compat)
@@ -135,9 +134,7 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
             title = self._data.get(CONF_FRIENDLY_NAME) or f"{self._data[CONF_PLATFORM]} • {self._data[CONF_SOURCE_ENTITY]}"
             return self.async_create_entry(title=title, data=self._data)
 
-        schema = vol.Schema({
-            vol.Required(CONF_COMBINE, default=False): bool
-        })
+        schema = vol.Schema({vol.Required(CONF_COMBINE, default=False): bool})
         return self.async_show_form(step_id="combine_toggle", data_schema=schema)
 
     # ───────────────────────────── STEP 5 ─────────────────────────────
@@ -159,10 +156,13 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
 
         schema = vol.Schema({
             vol.Required(CONF_COMBINE_ENTITY): SELECT_SENSOR,
-            vol.Required(CONF_COMBINE_ATTR_NAME): str,
+            vol.Required(CONF_COMBINE_ATTR_NAME): selector({"text": {}}),
             vol.Optional(CONF_HYPHENATE_STATE, default=False): bool,
         })
-        return self.async_show_form(step_id="combine", data_schema=schema)
+        return self.async_show_form(
+            step_id="combine",
+            data_schema=schema,
+        )
 
     # ───────────────────────── Options flow hook ───────────────────────
     @staticmethod
