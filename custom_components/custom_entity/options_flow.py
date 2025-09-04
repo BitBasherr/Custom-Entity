@@ -1,4 +1,4 @@
-"""Options flow exposing all Config Flow capabilities + extras, with nice selectors & fixed translations."""
+"""Options flow exposing all Config Flow capabilities + extras, with nice selectors & precision fix."""
 from __future__ import annotations
 
 import logging
@@ -57,7 +57,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
     Options wizard with:
       • Core (platform, friendly name, source entity, device class, inherit attrs list)
       • Combine (toggle, entity, attr name, hyphenate)
-      • Precision (label & attribute) with visual decimal options
+      • Precision (label & attribute) via visual decimal options
       • Extras (battery, presence helper)
       • Attribute sensors add/remove
 
@@ -73,6 +73,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
 
         # Back-compat: migrate old single precision to new label precision (in-memory)
         if CONF_COMBINE_PRECISION in self._opts and CONF_COMBINE_LABEL_PRECISION not in self._opts:
+            # Old value may already be int; keep it, but we'll present strings in the UI
             self._opts[CONF_COMBINE_LABEL_PRECISION] = self._opts.get(
                 CONF_COMBINE_PRECISION, DEFAULT_COMBINE_PRECISION
             )
@@ -123,9 +124,10 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
 
         schema = vol.Schema({
             vol.Required(CONF_PLATFORM, default=platform_now or SUPPORTED_PLATFORMS[0]): vol.In(SUPPORTED_PLATFORMS),
-            vol.Required(CONF_FRIENDLY_NAME, default=data_now.get(CONF_FRIENDLY_NAME, "")): selector({"text": {}}),
+            vol.Required(CONF_FRIENDLY_NAME, default=data_now.get(CONF_FRIENDLY_NAME, "")): vol.Coerce(str),
             vol.Required(CONF_SOURCE_ENTITY, default=data_now.get(CONF_SOURCE_ENTITY, "")): SELECT_ANY_ENTITY,
             vol.Optional(CONF_DEVICE_CLASS, default=data_now.get(CONF_DEVICE_CLASS, "")): (
+                # If we know classes, show a list; else a text field.
                 selector({"select": {"options": class_opts, "mode": "list"}}) if class_opts
                 else selector({"text": {}})
             ),
@@ -188,36 +190,44 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                     self._opts.pop(k, None)
             return await self.async_step_menu()
 
-        return self.async_show_form(
-            step_id="combine",
-            data_schema=schema,
-            description_placeholders={},
-        )
+        return self.async_show_form(step_id="combine", data_schema=schema)
 
     # ========= Precision (OPTIONS) =========
-    # Shows visual decimal options; stores ints (0,1,2,3).
-    # • Label precision: used when "Hyphenate" is ON — how many decimals to show in the label text.
-    # • Attribute precision: used when "Hyphenate" is OFF — how we round the value added to attributes.
+    # UI shows string values "0","1","2","3"; we coerce to int for storage.
+    # • Label precision = decimals used when Hyphenate is ON (value appended to the label).
+    # • Attribute precision = decimals used when Hyphenate is OFF (value written to attribute).
     async def async_step_precision(self, user_input=None):
         opts = self._opts
+
+        # Build string defaults for the select control
+        def _str_default(k: str, fallback: int) -> str:
+            v = opts.get(k, fallback)
+            try:
+                return str(int(v))
+            except Exception:
+                # if anything weird was stored, fall back safely
+                return str(fallback)
+
         schema = vol.Schema({
-            vol.Optional(CONF_COMBINE_LABEL_PRECISION, default=opts.get(CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
-            vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=opts.get(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
+            vol.Optional(CONF_COMBINE_LABEL_PRECISION, default=_str_default(CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
+            vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=_str_default(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
         })
         if user_input is not None:
-            self._opts[CONF_COMBINE_LABEL_PRECISION] = user_input.get(
-                CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION
-            )
-            self._opts[CONF_COMBINE_ATTR_PRECISION] = user_input.get(
-                CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION
-            )
+            # Incoming values are strings (per select schema) — coerce to int for storage
+            lbl_str = user_input.get(CONF_COMBINE_LABEL_PRECISION, str(DEFAULT_COMBINE_PRECISION))
+            attr_str = user_input.get(CONF_COMBINE_ATTR_PRECISION, str(DEFAULT_COMBINE_PRECISION))
+            try:
+                self._opts[CONF_COMBINE_LABEL_PRECISION] = int(lbl_str)
+            except Exception:
+                self._opts[CONF_COMBINE_LABEL_PRECISION] = DEFAULT_COMBINE_PRECISION
+            try:
+                self._opts[CONF_COMBINE_ATTR_PRECISION] = int(attr_str)
+            except Exception:
+                self._opts[CONF_COMBINE_ATTR_PRECISION] = DEFAULT_COMBINE_PRECISION
+
             return await self.async_step_menu()
 
-        return self.async_show_form(
-            step_id="precision",
-            data_schema=schema,
-            description_placeholders={},
-        )
+        return self.async_show_form(step_id="precision", data_schema=schema)
 
     # ========= Extras (battery/presence) (OPTIONS) =========
     async def async_step_extras(self, user_input=None):
@@ -239,11 +249,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 self._opts.pop(CONF_PRESENCE_HELPER, None)
             return await self.async_step_menu()
 
-        return self.async_show_form(
-            step_id="extras",
-            data_schema=schema,
-            description_placeholders={},
-        )
+        return self.async_show_form(step_id="extras", data_schema=schema)
 
     # ========= Attribute sensors (OPTIONS) =========
     async def async_step_attr_menu(self, user_input=None):
