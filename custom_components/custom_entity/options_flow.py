@@ -138,22 +138,4 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                     ),
                 ): SELECT_PRECISION,
                 vol.Optional(
-                    CONF_COMBINE_ATTR_PRECISION,
-                    default=self._opts.get(
-                        CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION
-                    ),
-                ): SELECT_PRECISION,
-                vol.Optional(
-                    CONF_COMBINE_ATTR_NAME,
-                    default=self._opts.get(CONF_COMBINE_ATTR_NAME, ""),
-                ): str,
-            }
-        )
-        return self.async_show_form(step_id="combine", data_schema=schema)
-
-    # ──────────────────────────────────────────────────────────────────────
-    # Older HA versions expect this helper
-    # ──────────────────────────────────────────────────────────────────────
-    @callback
-    def async_get_result(self):
-        return self._opts
+                    CONF_COMBINE_ATTR

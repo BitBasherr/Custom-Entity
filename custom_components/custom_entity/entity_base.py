@@ -131,7 +131,7 @@ class CustomBaseEntity:
         """Recompute state + attributes from all inputs."""
         self._extra_attrs = {}
 
-        src = self.hass.states.get(self._source_entity)
+        src: State | None = self.hass.states.get(self._source_entity)
         if src is None:
             # Underlying entity missing; expose as unavailable
             self._state = "unavailable"

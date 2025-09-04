@@ -38,7 +38,7 @@ SELECT_PRECISION = selector(
     {
         "select": {
             "options": [0, 1, 2, 3],
-            "mode": "dropdown",
+            "mode": "dropdown"
         }
     }
 )
