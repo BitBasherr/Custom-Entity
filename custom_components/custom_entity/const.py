@@ -1,72 +1,95 @@
-"""Constants and shared selectors for Custom Entity integration."""
 from __future__ import annotations
 
 from homeassistant.helpers.selector import selector
 
 DOMAIN = "custom_entity"
 
-# Core config keys (entry.data)
-CONF_PLATFORM = "platform"  # sensor, binary_sensor, number, switch, device_tracker, light, climate, select, text, button
-CONF_SOURCE_ENTITY = "source_entity"
+# ---------------- Core config keys (stored in entry.data) ----------------
+CONF_PLATFORM = "platform"
 CONF_FRIENDLY_NAME = "friendly_name"
+CONF_SOURCE_ENTITY = "source_entity"
 CONF_DEVICE_CLASS = "device_class"
+CONF_INHERIT_ATTRS = "inherit_attrs"
 
-# Back-compat: list of attribute names to mirror
-CONF_INHERIT_ATTRS = "inherit_attributes"
-
-# Options-flow keys (entry.options)
+# ---------------- Optional features (stored in entry.options) ------------
 CONF_BATTERY_ENTITY = "battery_entity"
-CONF_ATTRIBUTE_SENSORS = "attribute_sensors"  # {friendly -> entity_id}
+CONF_ATTRIBUTE_SENSORS = "attribute_sensors"  # mapping: {friendly_name: entity_id}
+
+# Combine
 CONF_COMBINE = "combine"
 CONF_COMBINE_ENTITY = "combine_entity"
 CONF_COMBINE_ATTR_NAME = "combine_attr_name"
 CONF_HYPHENATE_STATE = "hyphenate_state"
+
+# Presence helper (device_tracker convenience)
 CONF_PRESENCE_HELPER = "presence_helper"
 
-# Precision controls
-# Legacy single knob (back-compat)
-CONF_COMBINE_PRECISION = "combine_precision"
-# New explicit keys
-CONF_COMBINE_LABEL_PRECISION = "combine_label_precision"
-CONF_COMBINE_ATTR_PRECISION = "combine_attribute_precision"
-DEFAULT_COMBINE_PRECISION = 1  # default for both label and attribute
+# Precision controls (kept as strings in UI; parsed to int by entities)
+CONF_COMBINE_LABEL_PRECISION = "combine_label_precision"  # hyphenated label decimals
+CONF_COMBINE_ATTR_PRECISION = "combine_attr_precision"    # attribute decimals (non-hyphen)
+CONF_COMBINE_PRECISION = "combine_precision"              # legacy single knob (back-compat)
+DEFAULT_COMBINE_PRECISION = 1
 
-# Platform list we support
-SUPPORTED_PLATFORMS: list[str] = [
+# ---------------- Supported platforms ------------------------------------
+SUPPORTED_PLATFORMS = [
     "sensor",
     "binary_sensor",
-    "number",
     "switch",
+    "number",
+    "text",
+    "light",
     "device_tracker",
+    "select",
+    "button",
+    "climate",
+]
+
+# Only these platforms meaningfully support device_class
+PLATFORMS_WITH_DEVICE_CLASS = {
+    "sensor",
+    "binary_sensor",
     "light",
     "climate",
-    "select",
-    "text",
-    "button",
-]
+}
 
-# Selectors used by config/option flows
+# Suggestions for device_class (user can still free-type where lists are empty)
+DEVICE_CLASSES = {
+    "sensor": [
+        "temperature", "humidity", "energy", "voltage",
+        "power", "battery", "timestamp", "speed", "signal_strength",
+    ],
+    "binary_sensor": [
+        "motion", "occupancy", "opening", "smoke", "sound", "vibration", "presence",
+    ],
+    "light": [],     # free-text
+    "climate": [],   # free-text
+}
+
+# ---------------- Selectors (UI helpers) ---------------------------------
 SELECT_ANY_ENTITY = selector({"entity": {}})
-SELECT_SENSOR = selector({"entity": {"domain": "sensor"}})
-SELECT_TRACKER = selector({"entity": {"domain": "device_tracker"}})
-SELECT_BOOLEANISH = selector({"entity": {"domain": ["input_boolean", "binary_sensor", "switch"]}})
+SELECT_SENSOR = selector({"entity": {"domain": "sensor"}})  # for config_flow paths that still want sensors only
 
-# Visual, human-friendly precision selector:
-# IMPORTANT: 'value' MUST be a STRING per HA schema; we'll coerce to int on save/read.
+# Precision choices (string values satisfy HA's SelectSelector validation)
 PRECISION_OPTIONS = [
-    {"value": "0", "label": "0 (integer)"},
-    {"value": "1", "label": "0.1"},
-    {"value": "2", "label": "0.01"},
-    {"value": "3", "label": "0.001"},
+    {"label": "0  (e.g., 12)",    "value": "0"},
+    {"label": "1  (e.g., 12.3)",  "value": "1"},
+    {"label": "2  (e.g., 12.34)", "value": "2"},
+    {"label": "3  (e.g., 12.345)","value": "3"},
 ]
-SELECT_PRECISION = selector({"select": {"options": PRECISION_OPTIONS, "mode": "list"}})
+SELECT_PRECISION = selector({
+    "select": {
+        "options": PRECISION_OPTIONS,
+        "mode": "list"  # clean “bullet” list UI
+    }
+})
 
-# ───────── Internal (Options→Data bridge) ─────────
-OPT_APPLY_DATA_UPDATE = "__apply_data_update__"
-DATA_MUTABLE_KEYS = [
+# ---------------- Options→Data bridge markers ----------------------------
+# Used by options_flow to stage data changes; __init__.py applies & reloads.
+OPT_APPLY_DATA_UPDATE = "apply_data_update"
+DATA_MUTABLE_KEYS = {
     CONF_PLATFORM,
-    CONF_SOURCE_ENTITY,
     CONF_FRIENDLY_NAME,
+    CONF_SOURCE_ENTITY,
     CONF_DEVICE_CLASS,
     CONF_INHERIT_ATTRS,
-]
+}
