@@ -1,7 +1,7 @@
-"""Init for Custom Entity integration (with entry migration)."""
+"""Init for Custom Entity integration (with entry migration and Options→Data bridge)."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Dict
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -21,6 +21,8 @@ from .const import (
     CONF_PRESENCE_HELPER,
     CONF_COMBINE_PRECISION,
     CONF_COMBINE_LABEL_PRECISION,
+    OPT_APPLY_DATA_UPDATE,
+    DATA_MUTABLE_KEYS,
 )
 
 CONFIG_ENTRY_VERSION = 2  # bump when we migrate formats
@@ -73,10 +75,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if platform in SUPPORTED_PLATFORMS:
         await hass.config_entries.async_forward_entry_setups(entry, [platform])
 
-    async def _reload_on_update(hass: HomeAssistant, entry: ConfigEntry):
+    async def _on_update(hass: HomeAssistant, entry: ConfigEntry):
+        """
+        On any options update:
+          • Apply requested DATA changes (if any) from options marker
+          • Clean marker keys
+          • Reload the entry to apply platform/source/etc. changes
+        """
+        # 1) Apply pending data changes requested by options flow
+        opts = dict(entry.options or {})
+        pending: Dict[str, Any] | None = opts.get(OPT_APPLY_DATA_UPDATE)
+        if isinstance(pending, dict) and "data" in pending and isinstance(pending["data"], dict):
+            new_data = dict(entry.data or {})
+            for k, v in pending["data"].items():
+                if k in DATA_MUTABLE_KEYS:
+                    new_data[k] = v
+            # Clean the marker before saving
+            opts.pop(OPT_APPLY_DATA_UPDATE, None)
+            hass.config_entries.async_update_entry(entry, data=new_data, options=opts)
+
+        # 2) Always reload to reflect any changed options/platform
         await hass.config_entries.async_reload(entry.entry_id)
 
-    entry.async_on_unload(entry.add_update_listener(_reload_on_update))
+    entry.async_on_unload(entry.add_update_listener(_on_update))
     return True
 
 

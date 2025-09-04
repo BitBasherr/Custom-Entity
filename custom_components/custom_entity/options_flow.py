@@ -1,13 +1,21 @@
-"""Options flow for Custom Entity (battery/combine/precision/presence, etc.)."""
+"""Options flow exposing all Config Flow capabilities + extras, with Options→Data bridge."""
 from __future__ import annotations
 
 import logging
-import voluptuous as vol
+from typing import Any, Dict
 
+import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 
 from .const import (
+    # data keys
+    CONF_PLATFORM,
+    CONF_SOURCE_ENTITY,
+    CONF_FRIENDLY_NAME,
+    CONF_DEVICE_CLASS,
+    CONF_INHERIT_ATTRS,
+    # options keys
     CONF_ATTRIBUTE_SENSORS,
     CONF_BATTERY_ENTITY,
     CONF_COMBINE,
@@ -23,127 +31,258 @@ from .const import (
     SELECT_BOOLEANISH,
     SELECT_PRECISION,
     SELECT_SENSOR,
+    SUPPORTED_PLATFORMS,
+    # bridge markers
+    OPT_APPLY_DATA_UPDATE,
+    DATA_MUTABLE_KEYS,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
+# Curated device classes, same as in config_flow
+DEVICE_CLASSES = {
+    "sensor": [
+        "temperature", "humidity", "energy", "voltage",
+        "power", "battery", "timestamp"
+    ],
+    "binary_sensor": [
+        "motion", "occupancy", "opening", "smoke",
+        "sound", "vibration"
+    ],
+}
+
+
 class CustomEntityOptionsFlow(config_entries.OptionsFlow):
-    """Edit battery, combine, hyphenate, precision, and attribute extras."""
+    """
+    Options wizard with:
+      • Core (platform*, friendly name, source entity, device class, inherit attrs list)
+      • Combine (toggle, entity, attr name, hyphenate)
+      • Precision (label + attribute)
+      • Extras (battery, presence helper)
+      • Attribute sensors add/remove
+
+    *Changing platform/source updates entry.data via an internal Options→Data bridge,
+     then reloads the entry. Unique IDs remain the same.
+    """
 
     def __init__(self, entry: config_entries.ConfigEntry):
         self.entry = entry
-        self._opts: dict = dict(entry.options or {})
+        self._opts: Dict[str, Any] = dict(entry.options or {})
         self._opts.setdefault(CONF_ATTRIBUTE_SENSORS, {})
-        self._pending_entity: str | None = None
+        # Working copy of data we want to change from options
+        self._pending_data: Dict[str, Any] = {}
 
-        # Back-compat: migrate old single precision to new label precision
+        # Back-compat: migrate old single precision to new label precision (in-memory)
         if CONF_COMBINE_PRECISION in self._opts and CONF_COMBINE_LABEL_PRECISION not in self._opts:
             self._opts[CONF_COMBINE_LABEL_PRECISION] = self._opts.get(
                 CONF_COMBINE_PRECISION, DEFAULT_COMBINE_PRECISION
             )
 
-    # ─────────────────────────── Step 1: base toggles ───────────────────────────
+    # ========= Menu =========
     async def async_step_init(self, user_input=None):
-        if user_input is not None:
-            # battery (optional)
-            if user_input.get(CONF_BATTERY_ENTITY):
-                self._opts[CONF_BATTERY_ENTITY] = user_input[CONF_BATTERY_ENTITY]
-            else:
-                self._opts.pop(CONF_BATTERY_ENTITY, None)
+        return await self.async_step_menu()
 
-            # presence helper (optional)
-            if user_input.get(CONF_PRESENCE_HELPER):
-                self._opts[CONF_PRESENCE_HELPER] = user_input[CONF_PRESENCE_HELPER]
-            else:
-                self._opts.pop(CONF_PRESENCE_HELPER, None)
-
-            # combine + hyphenate
-            self._opts[CONF_COMBINE] = bool(user_input.get(CONF_COMBINE, False))
-            self._opts[CONF_HYPHENATE_STATE] = bool(user_input.get(CONF_HYPHENATE_STATE, False))
-
-            # If combining, go set details next; otherwise jump to attributes menu
-            if self._opts[CONF_COMBINE]:
-                return await self.async_step_combine()
-            return await self.async_step_attr_menu()
-
-        schema = vol.Schema(
-            {
-                vol.Optional(CONF_BATTERY_ENTITY, default=self._opts.get(CONF_BATTERY_ENTITY, "")): SELECT_ANY_ENTITY,
-                vol.Optional(CONF_PRESENCE_HELPER, default=self._opts.get(CONF_PRESENCE_HELPER, "")): SELECT_BOOLEANISH,
-                vol.Optional(CONF_COMBINE, default=self._opts.get(CONF_COMBINE, False)): bool,
-                vol.Optional(CONF_HYPHENATE_STATE, default=self._opts.get(CONF_HYPHENATE_STATE, False)): bool,
-            }
-        )
-        return self.async_show_form(step_id="init", data_schema=schema)
-
-    # ───────────────────────── Step 2: combine details ──────────────────────────
-    async def async_step_combine(self, user_input=None):
-        if user_input is not None:
-            self._opts[CONF_COMBINE_ENTITY] = user_input[CONF_COMBINE_ENTITY]
-            self._opts[CONF_COMBINE_LABEL_PRECISION] = user_input.get(
-                CONF_COMBINE_LABEL_PRECISION, self._opts.get(CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION)
-            )
-            self._opts[CONF_COMBINE_ATTR_PRECISION] = user_input.get(
-                CONF_COMBINE_ATTR_PRECISION, self._opts.get(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION)
-            )
-            attr_name = (user_input.get(CONF_COMBINE_ATTR_NAME) or "").strip()
-            if attr_name:
-                self._opts[CONF_COMBINE_ATTR_NAME] = attr_name
-            else:
-                self._opts.pop(CONF_COMBINE_ATTR_NAME, None)
-            return await self.async_step_attr_menu()
-
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_COMBINE_ENTITY, default=self._opts.get(CONF_COMBINE_ENTITY, "")): SELECT_SENSOR,
-                vol.Optional(CONF_COMBINE_LABEL_PRECISION, default=self._opts.get(CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
-                vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=self._opts.get(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
-                vol.Optional(CONF_COMBINE_ATTR_NAME, default=self._opts.get(CONF_COMBINE_ATTR_NAME, "")): str,
-            }
-        )
-        return self.async_show_form(step_id="combine", data_schema=schema)
-
-    # ─────────────────────── Step 3: attribute add/remove ───────────────────────
-    async def async_step_attr_menu(self, user_input=None):
+    async def async_step_menu(self, user_input=None):
         if user_input is not None:
             choice = user_input.get("choice")
-            if not choice or choice == "done":
-                return self.async_create_entry(title="", data=self._opts)
-            if choice == "add":
+            if choice == "core":
+                return await self.async_step_core()
+            if choice == "attrs":
+                return await self.async_step_attrs()
+            if choice == "combine":
+                return await self.async_step_combine()
+            if choice == "precision":
+                return await self.async_step_precision()
+            if choice == "extras":
+                return await self.async_step_extras()
+            if choice == "attr_sensors":
+                return await self.async_step_attr_menu()
+            if choice == "save":
+                return await self._finish()
+        schema = vol.Schema({
+            vol.Required("choice"): vol.In({
+                "core":        "Core settings (platform, source, name, class, inherit attrs)",
+                "attrs":       "Pick attributes to mirror",
+                "combine":     "Combine settings (entity, name, hyphenate, toggle)",
+                "precision":   "Precision (label & attribute)",
+                "extras":      "Extras (battery & presence helper)",
+                "attr_sensors":"Attribute sensors (add/remove friendly → entity)",
+                "save":        "✅ Save & apply",
+            })
+        })
+        return self.async_show_form(step_id="menu", data_schema=schema)
+
+    # ========= Core (DATA) =========
+    async def async_step_core(self, user_input=None):
+        data_now = dict(self.entry.data or {})
+        # Apply in-flight pending changes to show correct defaults
+        for k, v in self._pending_data.items():
+            data_now[k] = v
+
+        platform_now = data_now.get(CONF_PLATFORM)
+        class_opts = DEVICE_CLASSES.get(platform_now or "", [])
+        schema = vol.Schema({
+            vol.Required(CONF_PLATFORM, default=platform_now or SUPPORTED_PLATFORMS[0]): vol.In(SUPPORTED_PLATFORMS),
+            vol.Required(CONF_FRIENDLY_NAME, default=data_now.get(CONF_FRIENDLY_NAME, "")): str,
+            vol.Required(CONF_SOURCE_ENTITY, default=data_now.get(CONF_SOURCE_ENTITY, "")): SELECT_ANY_ENTITY,
+            vol.Optional(CONF_DEVICE_CLASS, default=data_now.get(CONF_DEVICE_CLASS, "")): (
+                vol.In(class_opts) if class_opts else str
+            ),
+        })
+        if user_input is not None:
+            # Stage DATA changes
+            for key in (CONF_PLATFORM, CONF_FRIENDLY_NAME, CONF_SOURCE_ENTITY, CONF_DEVICE_CLASS):
+                if key in user_input and key in DATA_MUTABLE_KEYS:
+                    val = user_input[key]
+                    # Normalize whitespace-only to None for device class
+                    if key == CONF_DEVICE_CLASS:
+                        val = (val or "").strip() or None
+                    self._pending_data[key] = val
+            return await self.async_step_menu()
+
+        return self.async_show_form(step_id="core", data_schema=schema)
+
+    # ========= Inherit attributes list (DATA) =========
+    async def async_step_attrs(self, user_input=None):
+        # Determine which source entity to introspect (pending override first)
+        source = self._pending_data.get(CONF_SOURCE_ENTITY, self.entry.data.get(CONF_SOURCE_ENTITY))
+        attrs = []
+        st = self.hass.states.get(source) if source else None
+        if st and isinstance(st.attributes, dict):
+            attrs = sorted([str(k) for k in st.attributes.keys()])
+
+        current = self.entry.data.get(CONF_INHERIT_ATTRS, [])
+        if isinstance(current, bool):
+            # If someone migrated to bool in the past, show blank list; keep list semantics
+            current = []
+
+        schema = vol.Schema({
+            vol.Optional(CONF_INHERIT_ATTRS, default=current): selector({
+                "select": {
+                    "options": attrs,
+                    "multiple": True,
+                    "mode": "dropdown"
+                }
+            })
+        })
+        if user_input is not None:
+            self._pending_data[CONF_INHERIT_ATTRS] = user_input.get(CONF_INHERIT_ATTRS, [])
+            return await self.async_step_menu()
+
+        return self.async_show_form(step_id="attrs", data_schema=schema)
+
+    # ========= Combine (OPTIONS) =========
+    async def async_step_combine(self, user_input=None):
+        opts = self._opts
+        schema = vol.Schema({
+            vol.Required(CONF_COMBINE, default=bool(opts.get(CONF_COMBINE, False))): bool,
+            vol.Optional(CONF_COMBINE_ENTITY, default=opts.get(CONF_COMBINE_ENTITY, "")): SELECT_SENSOR,
+            vol.Optional(CONF_COMBINE_ATTR_NAME, default=opts.get(CONF_COMBINE_ATTR_NAME, "")): str,
+            vol.Optional(CONF_HYPHENATE_STATE, default=bool(opts.get(CONF_HYPHENATE_STATE, False))): bool,
+        })
+        if user_input is not None:
+            self._opts[CONF_COMBINE] = bool(user_input.get(CONF_COMBINE, False))
+            if self._opts[CONF_COMBINE]:
+                self._opts[CONF_COMBINE_ENTITY] = user_input.get(CONF_COMBINE_ENTITY, "")
+                self._opts[CONF_COMBINE_ATTR_NAME] = (user_input.get(CONF_COMBINE_ATTR_NAME) or "").strip()
+                self._opts[CONF_HYPHENATE_STATE] = bool(user_input.get(CONF_HYPHENATE_STATE, False))
+            else:
+                for k in (CONF_COMBINE_ENTITY, CONF_COMBINE_ATTR_NAME, CONF_HYPHENATE_STATE):
+                    self._opts.pop(k, None)
+            return await self.async_step_menu()
+
+        return self.async_show_form(step_id="combine", data_schema=schema)
+
+    # ========= Precision (OPTIONS) =========
+    async def async_step_precision(self, user_input=None):
+        opts = self._opts
+        schema = vol.Schema({
+            vol.Optional(CONF_COMBINE_LABEL_PRECISION, default=opts.get(CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
+            vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=opts.get(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
+        })
+        if user_input is not None:
+            self._opts[CONF_COMBINE_LABEL_PRECISION] = user_input.get(
+                CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION
+            )
+            self._opts[CONF_COMBINE_ATTR_PRECISION] = user_input.get(
+                CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION
+            )
+            return await self.async_step_menu()
+
+        return self.async_show_form(step_id="precision", data_schema=schema)
+
+    # ========= Extras (battery/presence) (OPTIONS) =========
+    async def async_step_extras(self, user_input=None):
+        opts = self._opts
+        schema = vol.Schema({
+            # Both are truly optional; leave blank to clear.
+            vol.Optional(CONF_BATTERY_ENTITY, default=opts.get(CONF_BATTERY_ENTITY, "")): SELECT_ANY_ENTITY,
+            vol.Optional(CONF_PRESENCE_HELPER, default=opts.get(CONF_PRESENCE_HELPER, "")): SELECT_BOOLEANISH,
+        })
+        if user_input is not None:
+            batt = (user_input.get(CONF_BATTERY_ENTITY) or "").strip()
+            pres = (user_input.get(CONF_PRESENCE_HELPER) or "").strip()
+            if batt:
+                self._opts[CONF_BATTERY_ENTITY] = batt
+            else:
+                self._opts.pop(CONF_BATTERY_ENTITY, None)
+            if pres:
+                self._opts[CONF_PRESENCE_HELPER] = pres
+            else:
+                self._opts.pop(CONF_PRESENCE_HELPER, None)
+            return await self.async_step_menu()
+
+        return self.async_show_form(step_id="extras", data_schema=schema)
+
+    # ========= Attribute sensors (OPTIONS) =========
+    async def async_step_attr_menu(self, user_input=None):
+        if user_input is not None:
+            action = user_input.get("choice")
+            if not action or action == "done":
+                return await self.async_step_menu()
+            if action == "add":
                 return await self.async_step_attr_pick_entity()
-            if choice.startswith("del__"):
-                friendly = choice[5:]
-                self._opts[CONF_ATTRIBUTE_SENSORS].pop(friendly, None)
+            if action.startswith("del__"):
+                friendly = action[5:]
+                self._opts.setdefault(CONF_ATTRIBUTE_SENSORS, {}).pop(friendly, None)
 
         buttons = {
-            "done": "✅ Done",
+            "done": "⬅ Back",
             "add": "➕ Add attribute",
-            **{f"del__{k}": f"🗑 Remove “{k}”" for k in sorted(self._opts[CONF_ATTRIBUTE_SENSORS])},
+            **{f"del__{k}": f"🗑 Remove “{k}”" for k in sorted(self._opts.get(CONF_ATTRIBUTE_SENSORS, {}))}
         }
-        return self.async_show_form(
-            step_id="attr_menu",
-            data_schema=vol.Schema({vol.Optional("choice"): vol.In(buttons)}),
-            description_placeholders={"current": ", ".join(self._opts[CONF_ATTRIBUTE_SENSORS]) or "none"},
-        )
+        schema = vol.Schema({
+            vol.Required("choice"): vol.In(buttons)
+        })
+        return self.async_show_form(step_id="attr_menu", data_schema=schema)
 
     async def async_step_attr_pick_entity(self, user_input=None):
         if user_input is not None:
-            self._pending_entity = user_input["entity"]
+            self._pending_attr_entity = user_input["entity"]
             return await self.async_step_attr_pick_name()
-
         return self.async_show_form(step_id="attr_pick_entity", data_schema=vol.Schema({"entity": SELECT_ANY_ENTITY}))
 
     async def async_step_attr_pick_name(self, user_input=None):
         if user_input is not None:
-            friendly = user_input["name"].strip()
+            friendly = (user_input.get("name") or "").strip()
             if friendly:
-                self._opts[CONF_ATTRIBUTE_SENSORS][friendly] = self._pending_entity
-            self._pending_entity = None
+                self._opts.setdefault(CONF_ATTRIBUTE_SENSORS, {})[friendly] = self._pending_attr_entity
+            self._pending_attr_entity = None
             return await self.async_step_attr_menu()
-
         return self.async_show_form(step_id="attr_pick_name", data_schema=vol.Schema({vol.Required("name"): str}))
 
-    # Compatibility for older HA versions
+    # ========= Finish =========
+    async def _finish(self):
+        # If we staged DATA changes, encode them into the options so the
+        # update listener can apply and then clean them up.
+        if self._pending_data:
+            clean_data = {k: self._pending_data[k] for k in self._pending_data if k in DATA_MUTABLE_KEYS}
+            if clean_data:
+                self._opts[OPT_APPLY_DATA_UPDATE] = {"data": clean_data}
+
+        return self.async_create_entry(title="", data=self._opts)
+
+    # (Optional) Preview result for older HA versions
     @callback
     def async_get_result(self):
         return self._opts

@@ -33,7 +33,6 @@ DEVICE_CLASSES = {
         "motion", "occupancy", "opening", "smoke",
         "sound", "vibration"
     ],
-    # Add "light", "switch", etc., if you want guided picks there too.
 }
 
 
@@ -68,13 +67,10 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
 
             return await self.async_step_device_class()
 
-        # Platform selector uses the supported list from const to avoid drift.
         platform_select = selector({
             "select": {"options": SUPPORTED_PLATFORMS, "mode": "dropdown"}
         })
 
-        # Presence helper shown here (even if not a tracker) for simplicity.
-        # If platform != device_tracker it's harmless to leave unset.
         schema = vol.Schema({
             vol.Required(CONF_PLATFORM): platform_select,
             vol.Required(CONF_FRIENDLY_NAME): str,
@@ -95,7 +91,6 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
             return await self.async_step_inherit_attrs()
 
         if not class_opts:
-            # No curated list for this platform; skip cleanly
             self._data[CONF_DEVICE_CLASS] = None
             return await self.async_step_inherit_attrs()
 
@@ -110,11 +105,9 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type:
     # attributes to mirror (BACK-COMPAT: list-of-strings like you had before)
     async def async_step_inherit_attrs(self, user_input=None):
         if user_input is not None:
-            # Store list (possibly empty) to preserve old behavior.
             self._data[CONF_INHERIT_ATTRS] = user_input.get(CONF_INHERIT_ATTRS, [])
             return await self.async_step_combine_toggle()
 
-        # Offer current source attributes as choices (if entity exists now)
         attrs = []
         st = self.hass.states.get(self._data[CONF_SOURCE_ENTITY])
         if st and isinstance(st.attributes, dict):

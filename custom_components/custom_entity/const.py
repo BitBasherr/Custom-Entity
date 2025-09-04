@@ -12,7 +12,7 @@ CONF_FRIENDLY_NAME = "friendly_name"
 CONF_DEVICE_CLASS = "device_class"
 
 # Back-compat: previously this could be a LIST of attribute names.
-# Newer builds may use a BOOL (inherit all attributes).
+# Newer builds may use a BOOL (inherit all attributes). We keep list support.
 CONF_INHERIT_ATTRS = "inherit_attributes"
 
 # Options-flow keys (entry.options)
@@ -52,3 +52,15 @@ SELECT_SENSOR = selector({"entity": {"domain": "sensor"}})
 SELECT_TRACKER = selector({"entity": {"domain": "device_tracker"}})
 SELECT_BOOLEANISH = selector({"entity": {"domain": ["input_boolean", "binary_sensor", "switch"]}})
 SELECT_PRECISION = selector({"number": {"min": 0, "max": 3, "step": 1, "mode": "box"}})
+
+# ───────── Internal (Options→Data bridge) ─────────
+# The options flow can request core data updates (platform/source/etc.) by
+# writing these markers into options; the update listener applies and cleans.
+OPT_APPLY_DATA_UPDATE = "__apply_data_update__"
+DATA_MUTABLE_KEYS = [
+    CONF_PLATFORM,
+    CONF_SOURCE_ENTITY,
+    CONF_FRIENDLY_NAME,
+    CONF_DEVICE_CLASS,
+    CONF_INHERIT_ATTRS,
+]
