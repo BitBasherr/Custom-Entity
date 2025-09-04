@@ -1,9 +1,9 @@
-"""Shared logic for all Custom Entity types (backward compatible)."""
+"""Shared logic for all Custom Entity types."""
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable
+from typing import Any, Dict, Optional
 
-from homeassistant.core import HomeAssistant, callback, State
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import (
@@ -17,145 +17,168 @@ from .const import (
     CONF_COMBINE_ENTITY,
     CONF_COMBINE_ATTR_NAME,
     CONF_HYPHENATE_STATE,
-    CONF_PRESENCE_HELPER,
-    CONF_COMBINE_LABEL_PRECISION,
-    CONF_COMBINE_ATTR_PRECISION,
-    CONF_COMBINE_PRECISION,       # legacy single knob (back-compat)
+    # precision keys
+    CONF_COMBINE_PRECISION,            # legacy single knob
+    CONF_COMBINE_LABEL_PRECISION,      # new UI
+    CONF_COMBINE_ATTR_PRECISION,       # new UI
     DEFAULT_COMBINE_PRECISION,
 )
 
 
 class CustomBaseEntity:
-    """Mixin with shared wiring/state/updates for all platforms."""
+    """
+    Mixin base for all Custom-Entity platform classes.
 
-    _attr_name: str | None = None
-    _attr_device_class: str | None = None
+    NOTE: Subclasses must also inherit a Home Assistant Entity class
+    (e.g. SensorEntity, BinarySensorEntity, etc.) so that async_write_ha_state()
+    and _attr_* fields are recognized.
+    """
 
     def __init__(self, hass: HomeAssistant, entry) -> None:
         self.hass = hass
-        self.entry = entry  # keep consistent across platforms
+        self._entry = entry  # used in listeners & options lookups
 
-        # Core (from config flow)
-        data = entry.data or {}
-        self._source_entity: str = data.get(CONF_SOURCE_ENTITY)
-        self._attr_name = data.get(CONF_FRIENDLY_NAME) or "Custom Entity"
-        self._attr_device_class = data.get(CONF_DEVICE_CLASS)
+        data: Dict[str, Any] = entry.data or {}
+        opts: Dict[str, Any] = entry.options or {}
 
-        # BACK-COMPAT: inherit_attributes may be a LIST (old) or BOOL (new)
-        _inherit = data.get(CONF_INHERIT_ATTRS, True)
-        self._inherit_attrs_bool: bool = bool(_inherit) if isinstance(_inherit, bool) else False
-        self._inherit_attrs_list: Iterable[str] = _inherit if isinstance(_inherit, (list, tuple)) else ()
+        # Core / data
+        self._source_entity: str = data[CONF_SOURCE_ENTITY]
+        self._device_class: Optional[str] = data.get(CONF_DEVICE_CLASS)
+        self._inherit_attrs: list[str] = data.get(CONF_INHERIT_ATTRS, []) or []
 
-        # Options (preferred)
-        opts = dict(entry.options or {})
-        # Also read from data (old storage) if missing in options
-        def opt_or_data(key: str, default=None):
-            return opts.get(key, data.get(key, default))
+        # Options
+        self._battery_entity: Optional[str] = opts.get(CONF_BATTERY_ENTITY) or None
+        self._extra_map: Dict[str, str] = opts.get(CONF_ATTRIBUTE_SENSORS, {}) or {}
 
-        self._battery_entity: str | None = opt_or_data(CONF_BATTERY_ENTITY)
-        self._extra_map: dict[str, str] = dict(opt_or_data(CONF_ATTRIBUTE_SENSORS, {}) or {})
-        self._combine: bool = bool(opt_or_data(CONF_COMBINE, False))
-        self._combine_entity: str | None = opt_or_data(CONF_COMBINE_ENTITY)
-        self._combine_attr_name: str | None = opt_or_data(CONF_COMBINE_ATTR_NAME)
-        self._hyphenate: bool = bool(opt_or_data(CONF_HYPHENATE_STATE, False))
-        self._presence_helper: str | None = opt_or_data(CONF_PRESENCE_HELPER)
-
-        # Precision (label + attribute). Keep legacy single knob for label.
-        self._label_precision: int = int(
-            opt_or_data(CONF_COMBINE_LABEL_PRECISION, opt_or_data(CONF_COMBINE_PRECISION, DEFAULT_COMBINE_PRECISION))
+        # Combine behavior (stored primarily in entry.data for back-compat)
+        self._combine: bool = bool(data.get(CONF_COMBINE, False))
+        self._combine_entity: Optional[str] = data.get(CONF_COMBINE_ENTITY) or opts.get(CONF_COMBINE_ENTITY)
+        self._combine_attr_name: Optional[str] = data.get(CONF_COMBINE_ATTR_NAME) or opts.get(CONF_COMBINE_ATTR_NAME)
+        self._hyphenate: bool = bool(
+            (self._entry.options or {}).get(CONF_HYPHENATE_STATE, data.get(CONF_HYPHENATE_STATE, False))
         )
-        self._attr_precision: int = int(opt_or_data(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION))
 
-        # runtime
-        self._state: Any = None
+        # Friendly name / identity
+        self._attr_name = data.get(CONF_FRIENDLY_NAME, "Custom Entity")
+        self._attr_unique_id = entry.entry_id
+        if self._device_class and hasattr(self, "_attr_device_class"):
+            # Only set if the subclass supports device_class
+            self._attr_device_class = self._device_class  # type: ignore[attr-defined]
+
+        # Internal state cache
+        self._state: Optional[str] = None
         self._extra_attrs: Dict[str, Any] = {}
-        self._unsub = None
 
-    # ───────────────────────────── entity API ─────────────────────────────
-    @property
-    def available(self) -> bool:
-        return self._state != "unavailable"
+        # Device tracker lat/lon cache if subclass uses it
+        self._lat: Optional[float] = None
+        self._lon: Optional[float] = None
 
-    @property
-    def state(self) -> Any:
-        return self._state
+    # ----------------------- Precision helpers -----------------------
+
+    def _label_precision(self) -> int:
+        """
+        Hyphenated LABEL precision (decimals). New keys take priority.
+        Falls back to legacy single precision if present, else default.
+        """
+        opts = self._entry.options or {}
+        if CONF_COMBINE_LABEL_PRECISION in opts:
+            try:
+                return int(opts[CONF_COMBINE_LABEL_PRECISION])
+            except Exception:
+                return DEFAULT_COMBINE_PRECISION
+        if CONF_COMBINE_PRECISION in opts:  # legacy
+            try:
+                return int(opts[CONF_COMBINE_PRECISION])
+            except Exception:
+                return DEFAULT_COMBINE_PRECISION
+        return DEFAULT_COMBINE_PRECISION
+
+    def _attr_precision(self) -> int:
+        """
+        Attribute precision (decimals) used when NOT hyphenating.
+        Defaults like label precision if not explicitly set.
+        """
+        opts = self._entry.options or {}
+        if CONF_COMBINE_ATTR_PRECISION in opts:
+            try:
+                return int(opts[CONF_COMBINE_ATTR_PRECISION])
+            except Exception:
+                return DEFAULT_COMBINE_PRECISION
+        # if not set, mirror label precision for a sane default
+        return self._label_precision()
+
+    @staticmethod
+    def _coerce_float(value: Any) -> Optional[float]:
+        try:
+            # Don’t coerce None/"unknown"/"unavailable"
+            if value is None:
+                return None
+            s = str(value).strip().lower()
+            if s in ("unknown", "unavailable", "none", ""):
+                return None
+            return float(s)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _round_float(v: float, decimals: int) -> float:
+        try:
+            return round(float(v), int(decimals))
+        except Exception:
+            return v
+
+    @staticmethod
+    def _format_for_label(v: Any, decimals: int) -> str:
+        """
+        Make a human-friendly string for the label (hyphenated part).
+        Non-numeric values return as-is; numeric values fixed to 'decimals'.
+        """
+        num = CustomBaseEntity._coerce_float(v)
+        if num is None:
+            return str(v)
+        try:
+            d = max(0, int(decimals))
+            if d == 0:
+                return f"{int(round(num, 0))}"
+            return f"{num:.{d}f}"
+        except Exception:
+            return str(v)
+
+    # ----------------------- HA hooks -----------------------
+
+    async def async_added_to_hass(self) -> None:
+        """Register listeners to keep state/attributes in sync."""
+        track = async_track_state_change_event
+
+        track(self.hass, [self._source_entity], self._update)
+
+        if self._battery_entity:
+            track(self.hass, [self._battery_entity], self._update)
+
+        for ent in self._extra_map.values():
+            track(self.hass, [ent], self._update)
+
+        if self._combine and self._combine_entity:
+            track(self.hass, [self._combine_entity], self._update)
+
+        # Prime once
+        self._update(None)
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
         return self._extra_attrs
 
-    # ─────────────────────────── lifecycle ────────────────────────────
-    async def async_added_to_hass(self) -> None:
-        ent_ids: set[str] = {self._source_entity}
+    # ----------------------- core update -----------------------
 
-        if self._battery_entity:
-            ent_ids.add(self._battery_entity)
-
-        if self._combine and self._combine_entity:
-            ent_ids.add(self._combine_entity)
-
-        for ent in self._extra_map.values():
-            ent_ids.add(ent)
-
-        if self._presence_helper:
-            ent_ids.add(self._presence_helper)
-
-        self._unsub = async_track_state_change_event(self.hass, ent_ids, self._update)  # type: ignore[arg-type]
-        await self._prime_state()
-
-    async def _prime_state(self) -> None:
-        await self.hass.async_add_executor_job(lambda: None)  # yield
-        self._update(None)
-
-    async def async_will_remove_from_hass(self) -> None:
-        if self._unsub:
-            self._unsub()
-            self._unsub = None
-
-    # ───────────────────────────── helpers ─────────────────────────────
-    @callback
-    def _fmt_for_label(self, val: Any, precision: int) -> str:
-        try:
-            f = float(val)
-        except (TypeError, ValueError):
-            return str(val)
-        p = max(0, min(3, int(precision)))
-        if p == 0:
-            return str(int(round(f)))
-        return f"{f:.{p}f}".rstrip("0").rstrip(".")
-
-    @callback
-    def _round_for_attr(self, val: Any, precision: int) -> Any:
-        try:
-            f = float(val)
-        except (TypeError, ValueError):
-            return val
-        p = max(0, min(3, int(precision)))
-        if p == 0:
-            return int(round(f))
-        return round(f, p)
-
-    # ───────────────────────────── update ─────────────────────────────
     @callback
     def _update(self, _event) -> None:
-        self._extra_attrs = {}
+        """Mirror source entity; handle combine; build extra attrs; cache lat/lon; write once."""
+        src = self.hass.states.get(self._source_entity)
 
-        src: State | None = self.hass.states.get(self._source_entity)
-        if src is None:
-            self._state = "unavailable"
-            self.async_write_ha_state()
-            return
-
-        # Base state mirrors source
-        self._state = src.state
-
-        # Inherit attributes:
-        # - If bool True: copy all source attrs
-        # - Else if list: copy only listed names
-        if self._inherit_attrs_bool and isinstance(src.attributes, dict):
-            self._extra_attrs.update(src.attributes)
-        elif self._inherit_attrs_list:
-            for attr in self._inherit_attrs_list:
+        # Mirror primary state + selected attributes
+        if src:
+            self._state = src.state
+            for attr in self._inherit_attrs:
                 if attr in src.attributes:
                     self._extra_attrs[attr] = src.attributes[attr]
 
@@ -165,25 +188,37 @@ class CustomBaseEntity:
             if batt is not None:
                 self._extra_attrs["battery_level"] = batt.state
 
-        # User-defined extra sensors (friendly → entity_id)
-        for friendly, ent in self._extra_map.items():
+        # User-defined extra attributes (friendly -> entity.state)
+        for friendly, ent in (self._extra_map or {}).items():
             st = self.hass.states.get(ent)
             if st is not None:
                 self._extra_attrs[friendly] = st.state
 
-        # Combine
+        # Combine logic
         if self._combine and self._combine_entity:
             co = self.hass.states.get(self._combine_entity)
             if co is not None:
                 if self._hyphenate:
-                    self._state = f"{self._state} - {self._fmt_for_label(co.state, self._label_precision)}"
+                    # Append to label text (use label precision)
+                    part = self._format_for_label(co.state, self._label_precision())
+                    base = "" if self._state in (None, "unknown", "unavailable") else str(self._state)
+                    self._state = f"{base} - {part}".strip(" -")
                 else:
-                    key = self._combine_attr_name or "combine"
-                    self._extra_attrs[key] = self._round_for_attr(co.state, self._attr_precision)
+                    # Add as attribute (use attribute precision)
+                    key = (self._combine_attr_name or "combine").strip() or "combine"
+                    num = self._coerce_float(co.state)
+                    if num is None:
+                        # non-numeric, store raw
+                        self._extra_attrs[key] = co.state
+                    else:
+                        self._extra_attrs[key] = self._round_float(num, self._attr_precision())
 
-        # Optional tracker lat/lon cache for platform overrides
+        # Device tracker lat/lon cache (if subclass uses it)
         if hasattr(self, "_lat"):
-            self._lat = src.attributes.get("latitude")
-            self._lon = src.attributes.get("longitude")
+            if src is not None:
+                self._lat = src.attributes.get("latitude")
+                self._lon = src.attributes.get("longitude")
 
+        # Single write
+        # (Requires subclass to also inherit a HA Entity base class.)
         self.async_write_ha_state()
