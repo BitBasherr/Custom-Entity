@@ -34,11 +34,15 @@ DEFAULT_COMBINE_PRECISION = 1  # default for both label and attribute
 SELECT_ANY_ENTITY = selector({"entity": {}})
 SELECT_SENSOR = selector({"entity": {"domain": "sensor"}})
 SELECT_BOOLEANISH = selector({"entity": {"domain": ["input_boolean", "binary_sensor", "switch"]}})
+
+# FIX: use a number selector (0–3) instead of select-with-int-options
 SELECT_PRECISION = selector(
     {
-        "select": {
-            "options": [0, 1, 2, 3],
-            "mode": "dropdown"
+        "number": {
+            "min": 0,
+            "max": 3,
+            "step": 1,
+            "mode": "box"
         }
     }
 )
