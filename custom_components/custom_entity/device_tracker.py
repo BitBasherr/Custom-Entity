@@ -1,14 +1,12 @@
-"""Device Tracker platform for Custom Entity."""
+# custom_components/custom_entity/device_tracker.py
+"""Device Tracker platform for Custom Entity (HA 2025+ compatible)."""
 from __future__ import annotations
 
-from homeassistant.components.device_tracker import DeviceTrackerEntity
+from homeassistant.components.device_tracker.config_entry import TrackerEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .const import (
-    CONF_FRIENDLY_NAME,
-    CONF_PRESENCE_HELPER,
-)
+from .const import CONF_FRIENDLY_NAME, CONF_PRESENCE_HELPER
 from .entity_base import CustomBaseEntity
 
 
@@ -17,30 +15,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     async_add_entities([CustomTrackerEntity(hass, entry)])
 
 
-class CustomTrackerEntity(CustomBaseEntity, DeviceTrackerEntity):
+class CustomTrackerEntity(CustomBaseEntity, TrackerEntity):
     """Mirrors a source entity's lat/lon; optional presence helper metadata."""
 
     _attr_should_poll = False
     _attr_has_entity_name = False  # we already set a friendly name
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
-        DeviceTrackerEntity.__init__(self)
+        # Initialize both parent classes
+        TrackerEntity.__init__(self)
         CustomBaseEntity.__init__(self, hass, entry)
+
         self._attr_name = entry.data.get(CONF_FRIENDLY_NAME, "Custom Tracker")
+
         # Presence helper is optional and may live in options or legacy data
         self._presence_helper_entity: str | None = (
             (entry.options or {}).get(CONF_PRESENCE_HELPER)
             or (entry.data or {}).get(CONF_PRESENCE_HELPER)
         )
 
-    # ---- DeviceTrackerEntity requirements ----
+    # ---- TrackerEntity requirements ----
     @property
     def unique_id(self) -> str:
         return self._attr_unique_id
 
     @property
     def source_type(self):
-        # Using a plain string keeps compatibility across HA versions
+        # Returning a string keeps compatibility across HA versions
         return "gps"
 
     @property
@@ -51,8 +52,7 @@ class CustomTrackerEntity(CustomBaseEntity, DeviceTrackerEntity):
     def longitude(self):
         return self._lon
 
-    # Optional: pass-through any extra attributes from the base,
-    # plus expose the presence helper state (if configured) for visibility.
+    # Optional: surface presence-helper state alongside inherited attrs
     @property
     def extra_state_attributes(self):
         attrs = super().extra_state_attributes or {}
