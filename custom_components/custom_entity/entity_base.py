@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
+import logging
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_state_change_event
@@ -24,14 +25,16 @@ from .const import (
     DEFAULT_COMBINE_PRECISION,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class CustomBaseEntity:
     """
     Mixin base for all Custom-Entity platform classes.
 
     NOTE: Subclasses must also inherit a Home Assistant Entity class
-    (e.g. SensorEntity, BinarySensorEntity, etc.) so that async_write_ha_state()
-    and _attr_* fields are recognized.
+    (e.g. SensorEntity, BinarySensorEntity, TrackerEntity, etc.) so that
+    async_write_ha_state() and _attr_* fields are recognized.
     """
 
     def __init__(self, hass: HomeAssistant, entry) -> None:
@@ -50,12 +53,17 @@ class CustomBaseEntity:
         self._battery_entity: Optional[str] = opts.get(CONF_BATTERY_ENTITY) or None
         self._extra_map: Dict[str, str] = opts.get(CONF_ATTRIBUTE_SENSORS, {}) or {}
 
-        # Combine behavior (stored primarily in entry.data for back-compat)
-        self._combine: bool = bool(data.get(CONF_COMBINE, False))
-        self._combine_entity: Optional[str] = data.get(CONF_COMBINE_ENTITY) or opts.get(CONF_COMBINE_ENTITY)
-        self._combine_attr_name: Optional[str] = data.get(CONF_COMBINE_ATTR_NAME) or opts.get(CONF_COMBINE_ATTR_NAME)
+        # ---- Combine behavior (prefer options, fall back to data) ----
+        # This fixes the hyphenation issue after migration.
+        self._combine: bool = bool(opts.get(CONF_COMBINE, data.get(CONF_COMBINE, False)))
+        self._combine_entity: Optional[str] = (
+            opts.get(CONF_COMBINE_ENTITY) or data.get(CONF_COMBINE_ENTITY)
+        )
+        self._combine_attr_name: Optional[str] = (
+            opts.get(CONF_COMBINE_ATTR_NAME) or data.get(CONF_COMBINE_ATTR_NAME)
+        )
         self._hyphenate: bool = bool(
-            (self._entry.options or {}).get(CONF_HYPHENATE_STATE, data.get(CONF_HYPHENATE_STATE, False))
+            opts.get(CONF_HYPHENATE_STATE, data.get(CONF_HYPHENATE_STATE, False))
         )
 
         # Friendly name / identity

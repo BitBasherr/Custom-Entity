@@ -22,26 +22,20 @@ class CustomTrackerEntity(CustomBaseEntity, TrackerEntity):
     _attr_has_entity_name = False  # we already set a friendly name
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
-        # Initialize both parent classes
         TrackerEntity.__init__(self)
         CustomBaseEntity.__init__(self, hass, entry)
-
         self._attr_name = entry.data.get(CONF_FRIENDLY_NAME, "Custom Tracker")
-
-        # Presence helper is optional and may live in options or legacy data
         self._presence_helper_entity: str | None = (
             (entry.options or {}).get(CONF_PRESENCE_HELPER)
             or (entry.data or {}).get(CONF_PRESENCE_HELPER)
         )
 
-    # ---- TrackerEntity requirements ----
     @property
     def unique_id(self) -> str:
         return self._attr_unique_id
 
     @property
     def source_type(self):
-        # Returning a string keeps compatibility across HA versions
         return "gps"
 
     @property
@@ -52,7 +46,6 @@ class CustomTrackerEntity(CustomBaseEntity, TrackerEntity):
     def longitude(self):
         return self._lon
 
-    # Optional: surface presence-helper state alongside inherited attrs
     @property
     def extra_state_attributes(self):
         attrs = super().extra_state_attributes or {}
