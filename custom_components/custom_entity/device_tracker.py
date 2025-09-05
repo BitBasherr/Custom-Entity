@@ -1,10 +1,10 @@
-"""Custom device_tracker with mirror, presence helper, optional Combine (hyphenate), and Auto-address + combine conversion/suffix."""
+"""Custom device_tracker with mirror, presence helper, optional Combine (hyphenate), Auto-address (structured), and combine conversion/suffix."""
 from __future__ import annotations
 
 import asyncio
 import re
 from time import monotonic
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -116,7 +116,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
 
 class CustomTrackerEntity(TrackerEntity):
-    """Mirror a source tracker’s lat/lon/attrs, presence helper override, Combine with optional hyphenation, and reverse-geocoded address."""
+    """Mirror a source tracker’s lat/lon/attrs, presence helper override, Combine with optional hyphenation, and reverse-geocoded structured address."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
         self.hass = hass
@@ -146,7 +146,6 @@ class CustomTrackerEntity(TrackerEntity):
         self._hyphenate: bool = bool(o.get(CONF_HYPHENATE_STATE, d.get(CONF_HYPHENATE_STATE, False)))
         self._label_prec: int = _to_int(o.get(CONF_COMBINE_LABEL_PRECISION, d.get(CONF_COMBINE_LABEL_PRECISION, 1)), 1)
         self._attr_prec: int = _to_int(o.get(CONF_COMBINE_ATTR_PRECISION, d.get(CONF_COMBINE_ATTR_PRECISION, 1)), 1)
-        # NEW
         self._unit_mode = (o.get(CONF_COMBINE_UNIT_MODE, d.get(CONF_COMBINE_UNIT_MODE, "auto")) or "auto").lower()
         self._suffix = o.get(CONF_COMBINE_SUFFIX, d.get(CONF_COMBINE_SUFFIX, "")) or ""
 
@@ -162,7 +161,7 @@ class CustomTrackerEntity(TrackerEntity):
         self._lat: Optional[float] = None
         self._lon: Optional[float] = None
         self._acc: Optional[float] = None
-        self._address_cache: Optional[str] = None
+        self._address_cache: Optional[Dict[str, Any]] = None
         self._extra_attrs: dict = {}
 
         # geocode throttle
@@ -210,7 +209,6 @@ class CustomTrackerEntity(TrackerEntity):
         If hyphenate is enabled and combine is configured, build "base - value".
         If presence helper is truthy and NOT hyphenating, force "home".
         """
-        # Hyphenated state: build base + " - " + converted/suffixed combine value
         if self._hyphenate and self._combine and self._combine_entity:
             base = self._base_zone_name() or "not_home"
             co = self.hass.states.get(self._combine_entity)
@@ -223,11 +221,9 @@ class CustomTrackerEntity(TrackerEntity):
                     if not use_suffix and (applied or self._unit_mode in ("sec_to_min", "hr_to_min")):
                         use_suffix = " min"
                     return f"{base} - {txt}{use_suffix}" if use_suffix else f"{base} - {txt}"
-                # non-numeric combine: just append raw
                 return f"{base} - {co.state}"
-            return base  # no combine available yet
+            return base
 
-        # Non-hyphenated: let HA compute the zone unless presence helper forces "home"
         if self._presence_helper:
             ph = self.hass.states.get(self._presence_helper)
             if ph and _truthy(ph.state):
@@ -259,6 +255,20 @@ class CustomTrackerEntity(TrackerEntity):
         self._refresh()
         self.async_write_ha_state()
 
+    def _apply_address_to_attrs(self, info: Dict[str, Any]):
+        """Write structured address into attributes."""
+        if not info:
+            return
+        line1 = info.get("line1") or info.get("display_name")
+        if line1:
+            self._extra_attrs[self._label_attr] = line1
+        for key in ("city", "state", "township", "postcode", "county", "country", "neighbourhood"):
+            val = info.get(key)
+            if val:
+                self._extra_attrs[key] = val
+        if info.get("display_name"):
+            self._extra_attrs["full_address"] = info["display_name"]
+
     # ---------- update helpers ----------
     def _refresh(self):
         self._extra_attrs = {}
@@ -266,7 +276,6 @@ class CustomTrackerEntity(TrackerEntity):
         # mirror from source tracker
         src = self.hass.states.get(self._source_entity) if self._source_entity else None
         if src:
-            # lat/lon/accuracy
             try:
                 self._lat = float(src.attributes.get("latitude")) if src.attributes.get("latitude") is not None else None
                 self._lon = float(src.attributes.get("longitude")) if src.attributes.get("longitude") is not None else None
@@ -278,7 +287,6 @@ class CustomTrackerEntity(TrackerEntity):
             except Exception:
                 self._acc = None
 
-            # mirrored attributes
             for k in self._inherit_attrs:
                 if k in src.attributes:
                     self._extra_attrs[k] = src.attributes[k]
@@ -295,7 +303,7 @@ class CustomTrackerEntity(TrackerEntity):
             if st is not None:
                 self._extra_attrs[friendly] = st.state
 
-        # combine as attribute when NOT hyphenating (apply conversion but do NOT add suffix)
+        # combine as attribute when NOT hyphenating (apply conversion; no suffix in attribute)
         if self._combine and self._combine_entity and not self._hyphenate:
             co = self.hass.states.get(self._combine_entity)
             if co:
@@ -307,33 +315,31 @@ class CustomTrackerEntity(TrackerEntity):
                 else:
                     self._extra_attrs[self._combine_attr_name or "combine"] = str(co.state)
 
-        # auto-address (write to attribute)
+        # auto-address (write structured attributes)
         if self._auto_addr and self._lat is not None and self._lon is not None:
             asyncio.create_task(self._maybe_reverse_geocode(self._lat, self._lon))
 
-        # persist last known address
+        # persist last known structured address
         if self._address_cache:
-            self._extra_attrs[self._label_attr] = self._address_cache
+            self._apply_address_to_attrs(self._address_cache)
 
     async def _maybe_reverse_geocode(self, lat: float, lon: float):
         now = monotonic()
-        # interval check
         if now - self._last_lookup_ts < self._min_interval_min * 60:
             return
-        # distance check
         if self._last_lookup_lat is not None and self._last_lookup_lon is not None:
             moved = haversine_miles(self._last_lookup_lat, self._last_lookup_lon, lat, lon)
             if moved < self._min_move_mi:
                 return
 
-        address = None
+        info = None
         if self._geocode_provider == "nominatim":
-            address = await async_reverse_geocode(self.hass, lat, lon, contact=self._geocode_contact)
+            info = await async_reverse_geocode(self.hass, lat, lon, contact=self._geocode_contact)
 
-        if address:
-            self._address_cache = str(address)
+        if info:
+            self._address_cache = info
             self._last_lookup_ts = now
             self._last_lookup_lat = lat
             self._last_lookup_lon = lon
-            self._extra_attrs[self._label_attr] = self._address_cache
+            self._apply_address_to_attrs(info)
             self.async_write_ha_state()

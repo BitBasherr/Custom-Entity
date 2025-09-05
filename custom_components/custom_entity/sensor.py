@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import re
 from time import monotonic
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -60,7 +60,6 @@ def _fmt_number(val, precision: int) -> str:
 
 
 def _float_from_state(s) -> Optional[float]:
-    """Extract float even if the state contains text like '123 min'."""
     try:
         return float(s)
     except Exception:
@@ -77,7 +76,6 @@ def _unit_hint(state_str: str, attrs: dict) -> Optional[str]:
     u = attrs.get("unit_of_measurement") or attrs.get("unit")
     if isinstance(u, str) and u:
         return u.lower()
-    # fallback: parse from state text
     s = str(state_str).lower()
     if "sec" in s or " s" in s:
         return "s"
@@ -89,7 +87,6 @@ def _unit_hint(state_str: str, attrs: dict) -> Optional[str]:
 
 
 def _convert_to_minutes(val: float, mode: str, unit_hint: Optional[str]) -> tuple[float, bool]:
-    """Return (minutes_value, conversion_applied)."""
     mode = (mode or "auto").lower()
     if mode == "sec_to_min":
         return (val / 60.0, True)
@@ -97,12 +94,10 @@ def _convert_to_minutes(val: float, mode: str, unit_hint: Optional[str]) -> tupl
         return (val * 60.0, True)
     if mode == "none":
         return (val, False)
-    # auto
     if unit_hint in ("s", "sec", "second", "seconds"):
         return (val / 60.0, True)
     if unit_hint in ("h", "hr", "hrs", "hour", "hours"):
         return (val * 60.0, True)
-    # assume already minutes or unknown
     return (val, False)
 
 
@@ -132,14 +127,13 @@ class CustomSensorEntity(SensorEntity):
         if self._device_class:
             self._attr_device_class = self._device_class
 
-        # combine options (from options and/or data for back-compat)
+        # combine options
         self._combine = bool(o.get(CONF_COMBINE, d.get(CONF_COMBINE, False)))
         self._combine_entity = o.get(CONF_COMBINE_ENTITY, d.get(CONF_COMBINE_ENTITY))
         self._combine_attr_name = o.get(CONF_COMBINE_ATTR_NAME, d.get(CONF_COMBINE_ATTR_NAME, "combine"))
         self._hyphenate = bool(o.get(CONF_HYPHENATE_STATE, d.get(CONF_HYPHENATE_STATE, True)))
         self._label_prec = _to_int(o.get(CONF_COMBINE_LABEL_PRECISION, d.get(CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION)), DEFAULT_COMBINE_PRECISION)
         self._attr_prec = _to_int(o.get(CONF_COMBINE_ATTR_PRECISION, d.get(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION)), DEFAULT_COMBINE_PRECISION)
-        # NEW: conversion + suffix
         self._unit_mode = (o.get(CONF_COMBINE_UNIT_MODE, d.get(CONF_COMBINE_UNIT_MODE, "auto")) or "auto").lower()
         self._suffix = o.get(CONF_COMBINE_SUFFIX, d.get(CONF_COMBINE_SUFFIX, "")) or ""
 
@@ -148,10 +142,13 @@ class CustomSensorEntity(SensorEntity):
         self._min_move_mi = float(d.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
         self._min_interval_min = int(d.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
         self._geocode_provider = d.get(CONF_GEOCODE_PROVIDER, "nominatim")
-        self._geocode_contact = d.get(CONF_GEOCODE_CONTACT)  # optional
+        self._geocode_contact = d.get(CONF_GEOCODE_CONTACT)
 
         self._state: Optional[str] = None
         self._extra_attrs: dict = {}
+
+        # address cache (structured)
+        self._address_cache: Optional[Dict[str, Any]] = None
 
         # throttling state
         self._last_lookup_ts = 0.0
@@ -172,6 +169,23 @@ class CustomSensorEntity(SensorEntity):
         self._update()
         self.async_write_ha_state()
 
+    def _apply_address_to_attrs(self, info: Dict[str, Any]):
+        """Write structured address into attributes and return the line1 string."""
+        if not info:
+            return None
+        line1 = info.get("line1") or info.get("display_name")
+        # Primary address attribute (street + number)
+        if line1:
+            self._extra_attrs[self._label_attr] = line1
+        # Components
+        for key in ("city", "state", "township", "postcode", "county", "country", "neighbourhood"):
+            val = info.get(key)
+            if val:
+                self._extra_attrs[key] = val
+        if info.get("display_name"):
+            self._extra_attrs["full_address"] = info["display_name"]
+        return line1
+
     def _update(self):
         self._extra_attrs = {}
 
@@ -185,7 +199,6 @@ class CustomSensorEntity(SensorEntity):
 
         # Determine base state
         if self._mode == SENSOR_MODE_PERSON_LABEL:
-            # Make it clear this is *not* a Person entity
             self._extra_attrs["entity_note"] = "Sensor-only label (not a Person)."
 
             label_val = None
@@ -198,11 +211,17 @@ class CustomSensorEntity(SensorEntity):
                 if src:
                     label_val = src.attributes.get(self._label_attr)
 
-            # If missing and auto-address is enabled, try reverse-geocoding from lat/lon
+            # If missing and auto-address is enabled, try reverse-geocoding
             if (label_val in (None, "")) and self._auto_addr:
                 lat, lon = self._best_latlon()
                 if lat is not None and lon is not None:
                     asyncio.create_task(self._maybe_reverse_geocode(lat, lon))
+
+            # If we already have a cached structured address, populate attrs and use line1 as state
+            if self._address_cache:
+                line1 = self._apply_address_to_attrs(self._address_cache)
+                if line1 and not label_val:
+                    label_val = line1
 
             self._state = "" if label_val in (None, "") else str(label_val)
         else:
@@ -210,17 +229,19 @@ class CustomSensorEntity(SensorEntity):
             src = self.hass.states.get(self._source_entity) if self._source_entity else None
             self._state = None if not src else src.state
 
+            # In mirror mode, still show cached structured address as attributes if present
+            if self._address_cache:
+                self._apply_address_to_attrs(self._address_cache)
+
         # Combine behavior
         if self._combine and self._combine_entity:
             co = self.hass.states.get(self._combine_entity)
             if co:
-                # number + optional conversion to minutes
                 num = _float_from_state(co.state)
                 if num is not None:
                     minutes, applied = _convert_to_minutes(num, self._unit_mode, _unit_hint(co.state, co.attributes or {}))
                     if self._hyphenate:
                         txt = _fmt_number(minutes if applied else num, self._label_prec)
-                        # if conversion implies minutes and no custom suffix, default to " min" for clarity
                         use_suffix = self._suffix
                         if not use_suffix and (applied or self._unit_mode in ("sec_to_min", "hr_to_min")):
                             use_suffix = " min"
@@ -231,7 +252,6 @@ class CustomSensorEntity(SensorEntity):
                         val = minutes if applied else num
                         self._extra_attrs[self._combine_attr_name or "combine"] = _fmt_number(val, self._attr_prec)
                 else:
-                    # non-numeric; just append raw
                     if self._hyphenate:
                         base = "" if self._state in (None, "unknown", "unavailable") else str(self._state)
                         self._state = f"{base} - {co.state}" if base else str(co.state)
@@ -254,7 +274,6 @@ class CustomSensorEntity(SensorEntity):
         return None, None
 
     async def _maybe_reverse_geocode(self, lat: float, lon: float):
-        """Throttle and reverse-geocode if moved enough and interval elapsed."""
         now = monotonic()
         # interval check
         if now - self._last_lookup_ts < self._min_interval_min * 60:
@@ -265,20 +284,21 @@ class CustomSensorEntity(SensorEntity):
             if moved < self._min_move_mi:
                 return
 
-        address = None
+        info = None
         if self._geocode_provider == "nominatim":
-            address = await async_reverse_geocode(self.hass, lat, lon, contact=self._geocode_contact)
+            info = await async_reverse_geocode(self.hass, lat, lon, contact=self._geocode_contact)
 
-        if address:
-            # Set the label in state when we're in person-label mode; otherwise expose as attribute
-            if self._mode == SENSOR_MODE_PERSON_LABEL:
-                self._state = str(address)
-            else:
-                self._extra_attrs[self._label_attr] = str(address)
-            # update throttle state
+        if info:
+            self._address_cache = info
             self._last_lookup_ts = now
             self._last_lookup_lat = lat
             self._last_lookup_lon = lon
+
+            # Apply to attributes/state
+            line1 = self._apply_address_to_attrs(info)
+            if self._mode == SENSOR_MODE_PERSON_LABEL and line1:
+                self._state = str(line1)
+
             self.async_write_ha_state()
 
     @property
