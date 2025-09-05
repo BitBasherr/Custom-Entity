@@ -315,7 +315,6 @@ class CustomTrackerEntity(TrackerEntity):
         if not self._person_entity:
             new_person = self._find_linked_person()
             if new_person and new_person != self._resolved_person:
-                # start listening to this person too
                 self.async_on_remove(
                     async_track_state_change_event(self.hass, [new_person], self._on_event)
                 )
@@ -351,17 +350,32 @@ class CustomTrackerEntity(TrackerEntity):
             if st is not None:
                 self._extra_attrs[friendly] = st.state
 
-        # combine as attribute when NOT hyphenating (no suffix in attribute)
-        if self._combine and self._combine_entity and not self._hyphenate:
+        # --- UI helper: always expose the base zone name ---
+        base_zone = self._base_zone_name() or "not_home"
+        self._extra_attrs["ce_zone"] = base_zone
+
+        # --- Combine value as attribute when NOT hyphenating; and expose a UI helper 'ce_combined' either way ---
+        combined_val_text = None
+        if self._combine and self._combine_entity:
             co = self.hass.states.get(self._combine_entity)
             if co:
                 num = _float_from_state(co.state)
                 if num is not None:
                     minutes, converted = _convert_to_minutes_auto(num, _unit_hint(co.state, co.attributes or {}))
-                    val = minutes if converted else num
-                    self._extra_attrs[self._combine_attr_name or "combine"] = _fmt_number(val, self._attr_prec)
+                    # Attribute precision when not hyphenating, label precision when we intend to show next to avatar
+                    use_prec = self._attr_prec if not self._hyphenate else self._label_prec
+                    val_txt = _fmt_number(minutes if converted else num, use_prec)
+                    # attribute version (when not hyphenating)
+                    if not self._hyphenate:
+                        self._extra_attrs[self._combine_attr_name or "combine"] = val_txt
+                    combined_val_text = val_txt
                 else:
-                    self._extra_attrs[self._combine_attr_name or "combine"] = str(co.state)
+                    if not self._hyphenate:
+                        self._extra_attrs[self._combine_attr_name or "combine"] = str(co.state)
+                    combined_val_text = str(co.state)
+
+        if combined_val_text is not None:
+            self._extra_attrs["ce_combined"] = combined_val_text  # for map-card right-of-avatar badge
 
         # auto-address (write structured attributes)
         if self._auto_addr and self._lat is not None and self._lon is not None:
