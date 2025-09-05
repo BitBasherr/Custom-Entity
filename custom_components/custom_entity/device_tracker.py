@@ -1,5 +1,6 @@
 """Custom device_tracker with mirror, presence helper, optional Combine (hyphenate),
-Auto-address (structured), and Person picture sync (manual override + auto-detect)."""
+Auto-address (structured), Person picture sync (manual override + auto-detect),
+and friendly helper attributes for mapping overlays."""
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +13,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.components.device_tracker.config_entry import TrackerEntity
 from homeassistant.components.device_tracker.const import SourceType
-from homeassistant.components.zone import async_active_zone  # derive zone name from lat/lon
+from homeassistant.components.zone import async_active_zone  # resolve zone from lat/lon
 
 from .const import (
     # core
@@ -299,7 +300,7 @@ class CustomTrackerEntity(TrackerEntity):
             return
         line1 = info.get("line1") or info.get("display_name")
         if line1:
-            self._extra_attrs[self._label_attr] = line1
+            self._extra_attrs[self._label_attr] = line1  # e.g., "123 Main St"
         for key in ("city", "state", "township", "postcode", "county", "country", "neighbourhood"):
             val = info.get(key)
             if val:
@@ -350,32 +351,39 @@ class CustomTrackerEntity(TrackerEntity):
             if st is not None:
                 self._extra_attrs[friendly] = st.state
 
-        # --- UI helper: always expose the base zone name ---
-        base_zone = self._base_zone_name() or "not_home"
-        self._extra_attrs["ce_zone"] = base_zone
+        # --- Friendly helper attributes for mapping overlays ---
+        base_zone = self._base_zone_name()
+        if base_zone:
+            # Friendly names (shown in UI) + programmatic keys
+            self._extra_attrs["Location zone"] = base_zone
+            self._extra_attrs["location_zone"] = base_zone
+            # (temporary) legacy alias cleanup for anyone who used older keys
+            self._extra_attrs["ce_zone"] = base_zone  # keep one version for compatibility
 
-        # --- Combine value as attribute when NOT hyphenating; and expose a UI helper 'ce_combined' either way ---
-        combined_val_text = None
+        combined_val_text: Optional[str] = None
         if self._combine and self._combine_entity:
             co = self.hass.states.get(self._combine_entity)
-            if co:
+            if co is not None:
                 num = _float_from_state(co.state)
                 if num is not None:
                     minutes, converted = _convert_to_minutes_auto(num, _unit_hint(co.state, co.attributes or {}))
-                    # Attribute precision when not hyphenating, label precision when we intend to show next to avatar
-                    use_prec = self._attr_prec if not self._hyphenate else self._label_prec
-                    val_txt = _fmt_number(minutes if converted else num, use_prec)
-                    # attribute version (when not hyphenating)
-                    if not self._hyphenate:
-                        self._extra_attrs[self._combine_attr_name or "combine"] = val_txt
-                    combined_val_text = val_txt
+                    val = minutes if converted else num
+                    combined_val_text = _fmt_number(val, self._attr_prec)
                 else:
-                    if not self._hyphenate:
-                        self._extra_attrs[self._combine_attr_name or "combine"] = str(co.state)
                     combined_val_text = str(co.state)
 
+        # combine as attribute when NOT hyphenating (we keep the raw number/text)
+        if combined_val_text is not None and not self._hyphenate:
+            key = self._combine_attr_name or "combine"
+            self._extra_attrs[key] = combined_val_text
+
+        # Always expose ETA helpers if we had a combined value (better for map overlays)
         if combined_val_text is not None:
-            self._extra_attrs["ce_combined"] = combined_val_text  # for map-card right-of-avatar badge
+            self._extra_attrs["ETA minutes"] = combined_val_text
+            self._extra_attrs["eta_minutes"] = combined_val_text
+            self._extra_attrs["eta_label"] = f"{combined_val_text} min"
+            # (temporary) legacy alias
+            self._extra_attrs["ce_combined"] = combined_val_text
 
         # auto-address (write structured attributes)
         if self._auto_addr and self._lat is not None and self._lon is not None:
