@@ -36,9 +36,10 @@
       },
       "inherit_attrs": {
         "title": "Mirror attributes",
-        "description": "Pick which attributes to mirror from {source}. Leave empty to mirror none.",
-        "data": { "inherit_attrs": "Attributes to mirror" }
-      }
+        "description": "Pick which attributes to mirror from the source entity. Leave empty to mirror none.",
+        "data": {
+          "inherit_attrs": "Attributes to mirror"
+        }
       },
       "combine": {
         "title": "Combine settings",
