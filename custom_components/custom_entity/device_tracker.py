@@ -1,6 +1,5 @@
 """Custom device_tracker with mirror, presence helper, optional Combine (hyphenate),
-Auto-address (structured), Person picture sync (manual override + auto-detect),
-and friendly helper attributes for mapping overlays."""
+Auto-address (structured), and Person picture sync (manual override + auto-detect)."""
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.components.device_tracker.config_entry import TrackerEntity
 from homeassistant.components.device_tracker.const import SourceType
-from homeassistant.components.zone import async_active_zone  # resolve zone from lat/lon
+from homeassistant.components.zone import async_active_zone  # derive zone name from lat/lon
 
 from .const import (
     # core
@@ -300,7 +299,7 @@ class CustomTrackerEntity(TrackerEntity):
             return
         line1 = info.get("line1") or info.get("display_name")
         if line1:
-            self._extra_attrs[self._label_attr] = line1  # e.g., "123 Main St"
+            self._extra_attrs[self._label_attr] = line1
         for key in ("city", "state", "township", "postcode", "county", "country", "neighbourhood"):
             val = info.get(key)
             if val:
@@ -310,7 +309,9 @@ class CustomTrackerEntity(TrackerEntity):
 
     # ---------- update helpers ----------
     def _refresh(self):
+        # fresh attributes every update
         self._extra_attrs = {}
+        RESERVED = {"location_zone", "eta_minutes", "eta_label"}
 
         # If no manual person, keep auto-detecting and start listening when it changes
         if not self._person_entity:
@@ -335,8 +336,9 @@ class CustomTrackerEntity(TrackerEntity):
             except Exception:
                 self._acc = None
 
+            # mirror only non-reserved attributes
             for k in self._inherit_attrs:
-                if k in src.attributes:
+                if k in src.attributes and k not in RESERVED:
                     self._extra_attrs[k] = src.attributes[k]
 
         # battery passthrough
@@ -351,39 +353,31 @@ class CustomTrackerEntity(TrackerEntity):
             if st is not None:
                 self._extra_attrs[friendly] = st.state
 
-        # --- Friendly helper attributes for mapping overlays ---
-        base_zone = self._base_zone_name()
-        if base_zone:
-            # Friendly names (shown in UI) + programmatic keys
-            self._extra_attrs["Location zone"] = base_zone
-            self._extra_attrs["location_zone"] = base_zone
-            # (temporary) legacy alias cleanup for anyone who used older keys
-            self._extra_attrs["ce_zone"] = base_zone  # keep one version for compatibility
+        # --- UI helper: always expose the base zone name ---
+        base_zone = self._base_zone_name() or "not_home"
+        self._extra_attrs["location_zone"] = base_zone  # renders as “Location zone”
 
-        combined_val_text: Optional[str] = None
+        # --- Combine value (attribute when NOT hyphenating); always provide ETA helpers ---
+        combined_val_text = None
         if self._combine and self._combine_entity:
             co = self.hass.states.get(self._combine_entity)
-            if co is not None:
+            if co:
                 num = _float_from_state(co.state)
                 if num is not None:
                     minutes, converted = _convert_to_minutes_auto(num, _unit_hint(co.state, co.attributes or {}))
-                    val = minutes if converted else num
-                    combined_val_text = _fmt_number(val, self._attr_prec)
+                    use_prec = self._attr_prec if not self._hyphenate else self._label_prec
+                    val_txt = _fmt_number(minutes if converted else num, use_prec)
+                    if not self._hyphenate:
+                        self._extra_attrs[self._combine_attr_name or "combine"] = val_txt
+                    combined_val_text = val_txt
                 else:
+                    if not self._hyphenate:
+                        self._extra_attrs[self._combine_attr_name or "combine"] = str(co.state)
                     combined_val_text = str(co.state)
 
-        # combine as attribute when NOT hyphenating (we keep the raw number/text)
-        if combined_val_text is not None and not self._hyphenate:
-            key = self._combine_attr_name or "combine"
-            self._extra_attrs[key] = combined_val_text
-
-        # Always expose ETA helpers if we had a combined value (better for map overlays)
         if combined_val_text is not None:
-            self._extra_attrs["ETA minutes"] = combined_val_text
             self._extra_attrs["eta_minutes"] = combined_val_text
             self._extra_attrs["eta_label"] = f"{combined_val_text} min"
-            # (temporary) legacy alias
-            self._extra_attrs["ce_combined"] = combined_val_text
 
         # auto-address (write structured attributes)
         if self._auto_addr and self._lat is not None and self._lon is not None:
@@ -395,6 +389,7 @@ class CustomTrackerEntity(TrackerEntity):
 
         # update picture from person/source
         self._update_picture()
+
 
     async def _maybe_reverse_geocode(self, lat: float, lon: float):
         now = monotonic()
