@@ -178,6 +178,15 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         schema = vol.Schema(fields)
 
         if user_input is not None:
+            # --- make the form reactive when switching mode/platform ---
+            new_platform = str(user_input.get(CONF_PLATFORM, platform_now or "sensor"))
+            new_mode = user_input.get(CONF_SENSOR_MODE, mode_now)
+
+            # If user toggled to sensor/person_label, re-render this step so extra fields appear
+            if new_platform == "sensor" and new_mode != mode_now:
+                self._pending_data[CONF_PLATFORM] = new_platform
+                self._pending_data[CONF_SENSOR_MODE] = new_mode
+                return await self.async_step_core()
             staged = {
                 CONF_PLATFORM: str(user_input.get(CONF_PLATFORM, platform_now or "sensor")),
                 CONF_FRIENDLY_NAME: str(user_input.get(CONF_FRIENDLY_NAME, name_now)),
