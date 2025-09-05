@@ -1,10 +1,10 @@
-"""Custom Sensor entity with Mirror mode, Person Label mode, optional Auto-address,
-and explicit Combine unit override (auto / sec_to_min / hr_to_min / none)."""
+"""Custom Sensor entity with Mirror mode, Person Label mode, and optional Auto-address + combine conversion/suffix."""
 from __future__ import annotations
 
 import asyncio
+import re
 from time import monotonic
-from typing import Optional, Tuple
+from typing import Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -37,19 +37,11 @@ from .const import (
     CONF_GEOCODE_CONTACT,
     DEFAULT_ADDRESS_MIN_MOVE_MI,
     DEFAULT_ADDRESS_MIN_INTERVAL_MIN,
+    # combine conversion
+    CONF_COMBINE_UNIT_MODE,
+    CONF_COMBINE_SUFFIX,
 )
 from .geocode import async_reverse_geocode, haversine_miles
-
-
-# ---------------- Local keys for the new zero-ambiguity override -------------
-# (Kept local so you don't have to modify const.py immediately.)
-_COMBINE_UNIT_MODE_KEY = "combine_unit_mode"   # "auto" | "sec_to_min" | "hr_to_min" | "none"
-_COMBINE_SUFFIX_KEY    = "combine_suffix"      # e.g. " min"
-
-_MODE_AUTO     = "auto"
-_MODE_S_TO_MIN = "sec_to_min"
-_MODE_H_TO_MIN = "hr_to_min"
-_MODE_NONE     = "none"
 
 
 def _to_int(x, fallback: int) -> int:
@@ -67,66 +59,51 @@ def _fmt_number(val, precision: int) -> str:
         return str(val)
 
 
-def _normalize_unit(u: Optional[str]) -> str:
-    u = (u or "").strip().lower()
-    if u in ("m", "min", "minute", "minutes"):
-        return "min"
-    if u in ("s", "sec", "secs", "second", "seconds"):
-        return "s"
-    if u in ("h", "hr", "hrs", "hour", "hours"):
-        return "h"
-    return u  # unknown/empty → ""
-
-
-def _looks_like_seconds_fallback(ent_id: str, device_class: Optional[str]) -> bool:
-    # Very conservative: only when name hints secs AND device_class == duration
-    if (device_class or "").lower() != "duration":
-        return False
-    low = ent_id.lower()
-    return ("sec" in low) or ("second" in low)
-
-
-def _convert_value(
-    value_str: str,
-    uom_raw: Optional[str],
-    ent_id: str,
-    device_class: Optional[str],
-    mode: str,
-) -> Tuple[Optional[float], Optional[str], bool]:
-    """
-    Returns (numeric_value, target_unit, converted_flag).
-    - target_unit is normalized: "min" / "s" / "h" / "" / None
-    - converted_flag is True if we applied a unit conversion explicitly.
-    """
+def _float_from_state(s) -> Optional[float]:
+    """Extract float even if the state contains text like '123 min'."""
     try:
-        val = float(value_str)
+        return float(s)
     except Exception:
-        return None, _normalize_unit(uom_raw), False
+        m = re.search(r"-?\d+(?:\.\d+)?", str(s))
+        if m:
+            try:
+                return float(m.group(0))
+            except Exception:
+                return None
+    return None
 
-    uom = _normalize_unit(uom_raw)
 
-    # Explicit override modes first (no ambiguity).
-    if mode == _MODE_S_TO_MIN:
-        return val / 60.0, "min", True
-    if mode == _MODE_H_TO_MIN:
-        return val * 60.0, "min", True
-    if mode == _MODE_NONE:
-        return val, uom or None, False
+def _unit_hint(state_str: str, attrs: dict) -> Optional[str]:
+    u = attrs.get("unit_of_measurement") or attrs.get("unit")
+    if isinstance(u, str) and u:
+        return u.lower()
+    # fallback: parse from state text
+    s = str(state_str).lower()
+    if "sec" in s or " s" in s:
+        return "s"
+    if "hour" in s or " hr" in s or " h " in s:
+        return "h"
+    if "min" in s:
+        return "min"
+    return None
 
-    # AUTO: infer from units; avoid guessing when unit is unknown.
-    if uom == "min":
-        return val, "min", False
-    if uom == "s":
-        return val / 60.0, "min", True
-    if uom == "h":
-        return val * 60.0, "min", True
 
-    # No unit: conservative fallback for secs → min only if it really looks like seconds
-    if not uom and _looks_like_seconds_fallback(ent_id, device_class):
-        return val / 60.0, "min", True
-
-    # Unknown units: leave as-is
-    return val, uom or None, False
+def _convert_to_minutes(val: float, mode: str, unit_hint: Optional[str]) -> tuple[float, bool]:
+    """Return (minutes_value, conversion_applied)."""
+    mode = (mode or "auto").lower()
+    if mode == "sec_to_min":
+        return (val / 60.0, True)
+    if mode == "hr_to_min":
+        return (val * 60.0, True)
+    if mode == "none":
+        return (val, False)
+    # auto
+    if unit_hint in ("s", "sec", "second", "seconds"):
+        return (val / 60.0, True)
+    if unit_hint in ("h", "hr", "hrs", "hour", "hours"):
+        return (val * 60.0, True)
+    # assume already minutes or unknown
+    return (val, False)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
@@ -162,12 +139,9 @@ class CustomSensorEntity(SensorEntity):
         self._hyphenate = bool(o.get(CONF_HYPHENATE_STATE, d.get(CONF_HYPHENATE_STATE, True)))
         self._label_prec = _to_int(o.get(CONF_COMBINE_LABEL_PRECISION, d.get(CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION)), DEFAULT_COMBINE_PRECISION)
         self._attr_prec = _to_int(o.get(CONF_COMBINE_ATTR_PRECISION, d.get(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION)), DEFAULT_COMBINE_PRECISION)
-
-        # NEW: zero-ambiguity override + label suffix (read from options, fallback to data)
-        self._combine_unit_mode: str = (o.get(_COMBINE_UNIT_MODE_KEY) or d.get(_COMBINE_UNIT_MODE_KEY) or _MODE_AUTO).strip().lower()
-        if self._combine_unit_mode not in (_MODE_AUTO, _MODE_S_TO_MIN, _MODE_H_TO_MIN, _MODE_NONE):
-            self._combine_unit_mode = _MODE_AUTO
-        self._combine_suffix: str = (o.get(_COMBINE_SUFFIX_KEY) or d.get(_COMBINE_SUFFIX_KEY) or "").strip()
+        # NEW: conversion + suffix
+        self._unit_mode = (o.get(CONF_COMBINE_UNIT_MODE, d.get(CONF_COMBINE_UNIT_MODE, "auto")) or "auto").lower()
+        self._suffix = o.get(CONF_COMBINE_SUFFIX, d.get(CONF_COMBINE_SUFFIX, "")) or ""
 
         # auto-address controls
         self._auto_addr = bool(d.get(CONF_AUTO_ADDRESS, True))
@@ -236,29 +210,33 @@ class CustomSensorEntity(SensorEntity):
             src = self.hass.states.get(self._source_entity) if self._source_entity else None
             self._state = None if not src else src.state
 
-        # Combine behavior (hyphenate vs attribute) with unit override
+        # Combine behavior
         if self._combine and self._combine_entity:
             co = self.hass.states.get(self._combine_entity)
             if co:
-                val, target_uom, _converted = _convert_value(
-                    value_str=str(co.state),
-                    uom_raw=co.attributes.get("unit_of_measurement"),
-                    ent_id=co.entity_id,
-                    device_class=co.attributes.get("device_class"),
-                    mode=self._combine_unit_mode,
-                )
-                if val is not None:
+                # number + optional conversion to minutes
+                num = _float_from_state(co.state)
+                if num is not None:
+                    minutes, applied = _convert_to_minutes(num, self._unit_mode, _unit_hint(co.state, co.attributes or {}))
                     if self._hyphenate:
-                        disp = f"{val:.{self._label_prec}f}"
-                        # If no custom suffix provided but we're in minutes, append " min" to be explicit.
-                        suf = self._combine_suffix if self._combine_suffix else (" min" if target_uom == "min" else "")
+                        txt = _fmt_number(minutes if applied else num, self._label_prec)
+                        # if conversion implies minutes and no custom suffix, default to " min" for clarity
+                        use_suffix = self._suffix
+                        if not use_suffix and (applied or self._unit_mode in ("sec_to_min", "hr_to_min")):
+                            use_suffix = " min"
                         base = "" if self._state in (None, "unknown", "unavailable") else str(self._state)
-                        self._state = f"{base} - {disp}{suf}" if base else f"{disp}{suf}"
+                        combined = f"{txt}{use_suffix}" if use_suffix else txt
+                        self._state = f"{base} - {combined}" if base else combined
                     else:
-                        key = self._combine_attr_name or "combine"
-                        self._extra_attrs[key] = f"{val:.{self._attr_prec}f}"
-                        if target_uom:
-                            self._extra_attrs[f"{key}_uom"] = target_uom
+                        val = minutes if applied else num
+                        self._extra_attrs[self._combine_attr_name or "combine"] = _fmt_number(val, self._attr_prec)
+                else:
+                    # non-numeric; just append raw
+                    if self._hyphenate:
+                        base = "" if self._state in (None, "unknown", "unavailable") else str(self._state)
+                        self._state = f"{base} - {co.state}" if base else str(co.state)
+                    else:
+                        self._extra_attrs[self._combine_attr_name or "combine"] = str(co.state)
 
     def _best_latlon(self):
         """Prefer person lat/lon, fallback to tracker."""

@@ -50,7 +50,9 @@
           "combine_attr_name": "Attribute name (when not hyphenating)",
           "hyphenate_state": "Hyphenate (append to label)",
           "combine_label_precision": "Label precision (for hyphenated label)",
-          "combine_attr_precision": "Attribute precision (for attribute value)"
+          "combine_attr_precision": "Attribute precision (for attribute value)",
+          "combine_unit_mode": "Unit conversion (for combined value)",
+          "combine_suffix": "Label suffix (e.g., “ min”)"
         }
       }
     }
@@ -98,7 +100,9 @@
           "combine_attr_name": "Attribute name (when not hyphenating)",
           "hyphenate_state": "Hyphenate (append to label)",
           "combine_label_precision": "Label precision (for hyphenated label)",
-          "combine_attr_precision": "Attribute precision (for attribute value)"
+          "combine_attr_precision": "Attribute precision (for attribute value)",
+          "combine_unit_mode": "Unit conversion (for combined value)",
+          "combine_suffix": "Label suffix (e.g., “ min”)"
         }
       },
       "extras": {

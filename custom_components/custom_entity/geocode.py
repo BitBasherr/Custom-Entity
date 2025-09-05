@@ -9,9 +9,7 @@ NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 
 
 async def async_reverse_geocode(hass, lat: float, lon: float, contact: Optional[str] = None, lang: Optional[str] = None) -> Optional[str]:
-    """Minimal Nominatim reverse geocode. Returns a human-readable address string or None.
-    Be polite: include a descriptive User-Agent with contact info when provided.
-    """
+    """Minimal Nominatim reverse geocode. Returns a human-readable address string or None."""
     if lat is None or lon is None:
         return None
 

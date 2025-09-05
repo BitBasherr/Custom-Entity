@@ -46,6 +46,10 @@ from .const import (
     DEFAULT_GEOCODE_PROVIDER,
     SELECT_MILES_SLIDER,
     SELECT_MINUTES_SLIDER,
+    # NEW: combine conversion
+    CONF_COMBINE_UNIT_MODE,
+    CONF_COMBINE_SUFFIX,
+    SELECT_COMBINE_UNIT_MODE,
 )
 
 SENSOR_MODE_OPTIONS = [
@@ -154,6 +158,10 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         attrs = []
         src_id = self._data.get(CONF_SOURCE_ENTITY) or "source entity"
+        st = self.hass.states.get(self._data.get(CONF_SOURCE_ENTITY))
+        if st:
+            attrs = list(st.attributes.keys())
+
         return self.async_show_form(
             step_id="inherit_attrs",
             data_schema=vol.Schema({
@@ -164,15 +172,17 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders={"source": src_id},
         )
 
-
     async def async_step_combine(self, user_input=None):
         if user_input is not None:
             combine_on = bool(user_input.get(CONF_COMBINE, False))
             if combine_on:
-                combine_entity = str(user_input[CONF_COMBINE_ENTITY])
+                combine_entity = str(user_input.get(CONF_COMBINE_ENTITY) or "")
                 label_prec = int(str(user_input.get(CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION)))
                 attr_prec = int(str(user_input.get(CONF_COMBINE_ATTR_PRECISION, label_prec)))
                 hyphen = bool(user_input.get(CONF_HYPHENATE_STATE, False))
+                # NEW
+                unit_mode = str(user_input.get(CONF_COMBINE_UNIT_MODE, "auto")).strip().lower()
+                suffix = (user_input.get(CONF_COMBINE_SUFFIX) or "").strip()
 
                 self._data.update({
                     CONF_COMBINE: True,
@@ -181,26 +191,30 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_HYPHENATE_STATE: hyphen,
                     CONF_COMBINE_LABEL_PRECISION: label_prec,
                     CONF_COMBINE_ATTR_PRECISION: attr_prec,
+                    CONF_COMBINE_UNIT_MODE: unit_mode,
+                    CONF_COMBINE_SUFFIX: suffix,
                 })
             else:
                 self._data[CONF_COMBINE] = False
 
-            if self._data[CONF_PLATFORM] in PLATFORMS_WITH_DEVICE_CLASS:
+            if self._data.get("platform") in PLATFORMS_WITH_DEVICE_CLASS:
                 return await self.async_step_device_class()
 
-            return self.async_create_entry(title=self._data[CONF_FRIENDLY_NAME], data=self._data)
+            return self.async_create_entry(title=self._data["friendly_name"], data=self._data)
 
-        return self.async_show_form(
-            step_id="combine",
-            data_schema=vol.Schema({
-                vol.Required(CONF_COMBINE, default=False): bool,
-                vol.Optional(CONF_COMBINE_ENTITY): SELECT_ANY_ENTITY,
-                vol.Optional(CONF_COMBINE_ATTR_NAME, default="combine"): str,
-                vol.Optional(CONF_HYPHENATE_STATE, default=True): bool,
-                vol.Optional(CONF_COMBINE_LABEL_PRECISION, default=str(DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
-                vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=str(DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
-            }),
-        )
+        # Schema (with NEW fields)
+        schema = vol.Schema({
+            vol.Required(CONF_COMBINE, default=False): bool,
+            vol.Optional(CONF_COMBINE_ENTITY): SELECT_ANY_ENTITY,
+            vol.Optional(CONF_COMBINE_ATTR_NAME, default="combine"): str,
+            vol.Optional(CONF_HYPHENATE_STATE, default=True): bool,
+            vol.Optional(CONF_COMBINE_LABEL_PRECISION, default=str(DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
+            vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=str(DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
+            # NEW
+            vol.Optional(CONF_COMBINE_UNIT_MODE, default="auto"): SELECT_COMBINE_UNIT_MODE,
+            vol.Optional(CONF_COMBINE_SUFFIX, default=""): selector({"text": {}}),
+        })
+        return self.async_show_form(step_id="combine", data_schema=schema)
 
     async def async_step_device_class(self, user_input=None):
         platform = self._data[CONF_PLATFORM]

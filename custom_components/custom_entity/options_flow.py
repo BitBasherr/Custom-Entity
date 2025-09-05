@@ -54,6 +54,10 @@ from .const import (
     SELECT_PRECISION,
     SELECT_MILES_SLIDER,
     SELECT_MINUTES_SLIDER,
+    # NEW combine conversion
+    CONF_COMBINE_UNIT_MODE,
+    CONF_COMBINE_SUFFIX,
+    SELECT_COMBINE_UNIT_MODE,
     # bridge markers
     OPT_APPLY_DATA_UPDATE,
     DATA_MUTABLE_KEYS,
@@ -178,15 +182,6 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         schema = vol.Schema(fields)
 
         if user_input is not None:
-            # --- make the form reactive when switching mode/platform ---
-            new_platform = str(user_input.get(CONF_PLATFORM, platform_now or "sensor"))
-            new_mode = user_input.get(CONF_SENSOR_MODE, mode_now)
-
-            # If user toggled to sensor/person_label, re-render this step so extra fields appear
-            if new_platform == "sensor" and new_mode != mode_now:
-                self._pending_data[CONF_PLATFORM] = new_platform
-                self._pending_data[CONF_SENSOR_MODE] = new_mode
-                return await self.async_step_core()
             staged = {
                 CONF_PLATFORM: str(user_input.get(CONF_PLATFORM, platform_now or "sensor")),
                 CONF_FRIENDLY_NAME: str(user_input.get(CONF_FRIENDLY_NAME, name_now)),
@@ -267,6 +262,9 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             CONF_HYPHENATE_STATE: bool(o.get(CONF_HYPHENATE_STATE, d.get(CONF_HYPHENATE_STATE, True))),
             CONF_COMBINE_LABEL_PRECISION: str(o.get(CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION)),
             CONF_COMBINE_ATTR_PRECISION: str(o.get(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION)),
+            # NEW
+            CONF_COMBINE_UNIT_MODE: o.get(CONF_COMBINE_UNIT_MODE, d.get(CONF_COMBINE_UNIT_MODE, "auto")),
+            CONF_COMBINE_SUFFIX: o.get(CONF_COMBINE_SUFFIX, d.get(CONF_COMBINE_SUFFIX, "")),
         }
 
         schema = vol.Schema({
@@ -276,11 +274,15 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             vol.Optional(CONF_HYPHENATE_STATE, default=defaults[CONF_HYPHENATE_STATE]): bool,
             vol.Optional(CONF_COMBINE_LABEL_PRECISION, default=defaults[CONF_COMBINE_LABEL_PRECISION]): SELECT_PRECISION,
             vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=defaults[CONF_COMBINE_ATTR_PRECISION]): SELECT_PRECISION,
+            # NEW fields
+            vol.Optional(CONF_COMBINE_UNIT_MODE, default=defaults[CONF_COMBINE_UNIT_MODE]): SELECT_COMBINE_UNIT_MODE,
+            vol.Optional(CONF_COMBINE_SUFFIX, default=defaults[CONF_COMBINE_SUFFIX]): selector({"text": {}}),
         })
 
         if user_input is not None:
             combine_on = bool(user_input.get(CONF_COMBINE, False))
             new_opts = dict(o)
+
             if combine_on:
                 new_opts[CONF_COMBINE] = True
                 new_opts[CONF_COMBINE_ENTITY] = str(user_input.get(CONF_COMBINE_ENTITY, defaults[CONF_COMBINE_ENTITY]))
@@ -288,14 +290,15 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 new_opts[CONF_HYPHENATE_STATE] = bool(user_input.get(CONF_HYPHENATE_STATE, defaults[CONF_HYPHENATE_STATE]))
                 new_opts[CONF_COMBINE_LABEL_PRECISION] = str(user_input.get(CONF_COMBINE_LABEL_PRECISION, defaults[CONF_COMBINE_LABEL_PRECISION]))
                 new_opts[CONF_COMBINE_ATTR_PRECISION] = str(user_input.get(CONF_COMBINE_ATTR_PRECISION, defaults[CONF_COMBINE_ATTR_PRECISION]))
+                # NEW
+                new_opts[CONF_COMBINE_UNIT_MODE] = str(user_input.get(CONF_COMBINE_UNIT_MODE, "auto")).strip().lower()
+                new_opts[CONF_COMBINE_SUFFIX] = (user_input.get(CONF_COMBINE_SUFFIX) or "").strip()
             else:
                 new_opts[CONF_COMBINE] = False
                 for k in (
-                    CONF_COMBINE_ENTITY,
-                    CONF_COMBINE_ATTR_NAME,
-                    CONF_HYPHENATE_STATE,
-                    CONF_COMBINE_LABEL_PRECISION,
-                    CONF_COMBINE_ATTR_PRECISION,
+                    CONF_COMBINE_ENTITY, CONF_COMBINE_ATTR_NAME, CONF_HYPHENATE_STATE,
+                    CONF_COMBINE_LABEL_PRECISION, CONF_COMBINE_ATTR_PRECISION,
+                    CONF_COMBINE_UNIT_MODE, CONF_COMBINE_SUFFIX,
                 ):
                     new_opts.pop(k, None)
 
