@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.components.device_tracker.config_entry import TrackerEntity
 from homeassistant.components.device_tracker.const import SourceType
-from homeassistant.helpers.zone import async_active_zone  # derive zone name from lat/lon
+from homeassistant.components.zone import async_active_zone  # derive zone name from lat/lon
 
 from .const import (
     # core
@@ -149,7 +149,7 @@ class CustomTrackerEntity(TrackerEntity):
         if self._lat is None or self._lon is None:
             return None
 
-        z = async_active_zone(self.hass, self._lat, self._lon, self._acc)
+        z = async_active_zone(self.hass, self._lat, self._lon, radius=self._acc)
         if z:
             return z.name
         return "not_home"
