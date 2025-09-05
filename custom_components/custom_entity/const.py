@@ -30,14 +30,25 @@ CONF_COMBINE_ATTR_PRECISION = "combine_attr_precision"    # attribute decimals (
 CONF_COMBINE_PRECISION = "combine_precision"              # legacy single knob (back-compat)
 DEFAULT_COMBINE_PRECISION = 1
 
-# ---------------- New: Person Label sensor mode --------------------------
+# ---------------- Person Label sensor mode -------------------------------
 CONF_SENSOR_MODE = "sensor_mode"
 SENSOR_MODE_MIRROR = "mirror"
 SENSOR_MODE_PERSON_LABEL = "person_label"
 
 CONF_PERSON_ENTITY = "person_entity"
 CONF_LABEL_ATTR = "label_attr"
-DEFAULT_LABEL_ATTR = "address"   # what you wanted to surface from trackers/person
+DEFAULT_LABEL_ATTR = "address"   # default attribute name to expose as label
+
+# Auto-address (reverse-geocode) config (stored in entry.data)
+CONF_AUTO_ADDRESS = "auto_address"
+CONF_ADDRESS_MIN_MOVE_MI = "address_min_move_mi"
+CONF_ADDRESS_MIN_INTERVAL_MIN = "address_min_interval_min"
+CONF_GEOCODE_PROVIDER = "geocode_provider"
+CONF_GEOCODE_CONTACT = "geocode_contact"  # email or URL per Nominatim policy
+
+DEFAULT_ADDRESS_MIN_MOVE_MI = 0.1        # miles
+DEFAULT_ADDRESS_MIN_INTERVAL_MIN = 5     # minutes
+DEFAULT_GEOCODE_PROVIDER = "nominatim"
 
 # ---------------- Supported platforms ------------------------------------
 SUPPORTED_PLATFORMS = [
@@ -90,12 +101,19 @@ PRECISION_OPTIONS = [
 SELECT_PRECISION = selector({
     "select": {
         "options": PRECISION_OPTIONS,
-        "mode": "list"  # clean “bullet” list UI
+        "mode": "list"
     }
 })
 
+# Sliders for distance/interval
+SELECT_MILES_SLIDER = selector({
+    "number": {"min": 0.01, "max": 5.0, "step": 0.01, "mode": "slider", "unit_of_measurement": "mi"}
+})
+SELECT_MINUTES_SLIDER = selector({
+    "number": {"min": 1, "max": 180, "step": 1, "mode": "slider", "unit_of_measurement": "min"}
+})
+
 # ---------------- Options→Data bridge markers ----------------------------
-# Used by options_flow to stage data changes; __init__.py applies & reloads.
 OPT_APPLY_DATA_UPDATE = "apply_data_update"
 DATA_MUTABLE_KEYS = {
     CONF_PLATFORM,
@@ -103,8 +121,13 @@ DATA_MUTABLE_KEYS = {
     CONF_SOURCE_ENTITY,
     CONF_DEVICE_CLASS,
     CONF_INHERIT_ATTRS,
-    # the new sensor mode fields live in data too (so options can change them)
+    # person-label + auto-address
     CONF_SENSOR_MODE,
     CONF_PERSON_ENTITY,
     CONF_LABEL_ATTR,
+    CONF_AUTO_ADDRESS,
+    CONF_ADDRESS_MIN_MOVE_MI,
+    CONF_ADDRESS_MIN_INTERVAL_MIN,
+    CONF_GEOCODE_PROVIDER,
+    CONF_GEOCODE_CONTACT,
 }

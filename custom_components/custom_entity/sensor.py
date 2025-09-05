@@ -1,7 +1,10 @@
-"""Custom Sensor entity with Mirror mode and Person Label mode."""
+"""Custom Sensor entity with Mirror mode, Person Label mode, and optional Auto-address."""
 from __future__ import annotations
 
-from homeassistant.helpers.entity import Entity
+import asyncio
+from time import monotonic
+from typing import Optional
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.components.sensor import SensorEntity
@@ -18,13 +21,23 @@ from .const import (
     CONF_COMBINE_LABEL_PRECISION,
     CONF_COMBINE_ATTR_PRECISION,
     DEFAULT_COMBINE_PRECISION,
+    # modes
     CONF_SENSOR_MODE,
     SENSOR_MODE_MIRROR,
     SENSOR_MODE_PERSON_LABEL,
     CONF_PERSON_ENTITY,
     CONF_LABEL_ATTR,
     DEFAULT_LABEL_ATTR,
+    # auto address
+    CONF_AUTO_ADDRESS,
+    CONF_ADDRESS_MIN_MOVE_MI,
+    CONF_ADDRESS_MIN_INTERVAL_MIN,
+    CONF_GEOCODE_PROVIDER,
+    CONF_GEOCODE_CONTACT,
+    DEFAULT_ADDRESS_MIN_MOVE_MI,
+    DEFAULT_ADDRESS_MIN_INTERVAL_MIN,
 )
+from .geocode import async_reverse_geocode, haversine_miles
 
 
 def _to_int(x, fallback: int) -> int:
@@ -54,12 +67,11 @@ class CustomSensorEntity(SensorEntity):
         d = entry.data
         o = entry.options or {}
 
-        self._platform = "sensor"
         self._mode = d.get(CONF_SENSOR_MODE, SENSOR_MODE_MIRROR)
 
-        self._source_entity = d.get(CONF_SOURCE_ENTITY)
-        self._person_entity = d.get(CONF_PERSON_ENTITY)
-        self._label_attr = d.get(CONF_LABEL_ATTR, DEFAULT_LABEL_ATTR)
+        self._source_entity = d.get(CONF_SOURCE_ENTITY) or None
+        self._person_entity = d.get(CONF_PERSON_ENTITY) or None
+        self._label_attr = d.get(CONF_LABEL_ATTR, DEFAULT_LABEL_ATTR) or DEFAULT_LABEL_ATTR
 
         self._device_class = d.get(CONF_DEVICE_CLASS)
         self._inherit_attrs = d.get(CONF_INHERIT_ATTRS, [])
@@ -69,7 +81,7 @@ class CustomSensorEntity(SensorEntity):
         if self._device_class:
             self._attr_device_class = self._device_class
 
-        # combine options (from options)
+        # combine options (from options and/or data for back-compat)
         self._combine = bool(o.get(CONF_COMBINE, d.get(CONF_COMBINE, False)))
         self._combine_entity = o.get(CONF_COMBINE_ENTITY, d.get(CONF_COMBINE_ENTITY))
         self._combine_attr_name = o.get(CONF_COMBINE_ATTR_NAME, d.get(CONF_COMBINE_ATTR_NAME, "combine"))
@@ -77,12 +89,23 @@ class CustomSensorEntity(SensorEntity):
         self._label_prec = _to_int(o.get(CONF_COMBINE_LABEL_PRECISION, d.get(CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION)), DEFAULT_COMBINE_PRECISION)
         self._attr_prec = _to_int(o.get(CONF_COMBINE_ATTR_PRECISION, d.get(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION)), DEFAULT_COMBINE_PRECISION)
 
-        self._state = None
+        # auto-address controls
+        self._auto_addr = bool(d.get(CONF_AUTO_ADDRESS, True))
+        self._min_move_mi = float(d.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
+        self._min_interval_min = int(d.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
+        self._geocode_provider = d.get(CONF_GEOCODE_PROVIDER, "nominatim")
+        self._geocode_contact = d.get(CONF_GEOCODE_CONTACT)  # optional
+
+        self._state: Optional[str] = None
         self._extra_attrs: dict = {}
+
+        # throttling state
+        self._last_lookup_ts = 0.0
+        self._last_lookup_lat = None
+        self._last_lookup_lon = None
 
     async def async_added_to_hass(self):
         self._update()
-        # watch source, person and combine entities for changes
         track = self.hass.helpers.event.async_track_state_change_event
         if self._source_entity:
             self.async_on_remove(track([self._source_entity], self._handle_event))
@@ -108,18 +131,25 @@ class CustomSensorEntity(SensorEntity):
 
         # Determine base state
         if self._mode == SENSOR_MODE_PERSON_LABEL:
-            # This is explicitly a sensor label — not a Person entity
-            self._extra_attrs["entity_note"] = "This is a label sensor, not a Person."
-            # Prefer person attribute, fall back to device_tracker attribute
+            # Make it clear this is *not* a Person entity
+            self._extra_attrs["entity_note"] = "Sensor-only label (not a Person)."
+
             label_val = None
-            if self._person_entity:
-                pst = self.hass.states.get(self._person_entity)
-                if pst:
-                    label_val = pst.attributes.get(self._label_attr)
+            person = self.hass.states.get(self._person_entity) if self._person_entity else None
+            if person:
+                label_val = person.attributes.get(self._label_attr)
+
             if label_val is None and self._source_entity:
-                sst = self.hass.states.get(self._source_entity)
-                if sst:
-                    label_val = sst.attributes.get(self._label_attr)
+                src = self.hass.states.get(self._source_entity)
+                if src:
+                    label_val = src.attributes.get(self._label_attr)
+
+            # If missing and auto-address is enabled, try reverse-geocoding from lat/lon
+            if (label_val in (None, "")) and self._auto_addr:
+                lat, lon = self._best_latlon()
+                if lat is not None and lon is not None:
+                    asyncio.create_task(self._maybe_reverse_geocode(lat, lon))
+
             self._state = "" if label_val in (None, "") else str(label_val)
         else:
             # Mirror mode — copy the source state verbatim
@@ -131,13 +161,54 @@ class CustomSensorEntity(SensorEntity):
             co = self.hass.states.get(self._combine_entity)
             if co:
                 if self._hyphenate:
-                    # show combined value in label with label precision if numeric
                     combined = _fmt_number(co.state, self._label_prec)
                     base = "" if self._state in (None, "unknown", "unavailable") else str(self._state)
                     self._state = f"{base} - {combined}" if base else combined
                 else:
-                    # add as attribute with attr precision if numeric
                     self._extra_attrs[self._combine_attr_name or "combine"] = _fmt_number(co.state, self._attr_prec)
+
+    def _best_latlon(self):
+        """Prefer person lat/lon, fallback to tracker."""
+        for ent_id in (self._person_entity, self._source_entity):
+            st = self.hass.states.get(ent_id) if ent_id else None
+            if not st:
+                continue
+            lat = st.attributes.get("latitude")
+            lon = st.attributes.get("longitude")
+            try:
+                if lat is not None and lon is not None:
+                    return float(lat), float(lon)
+            except Exception:
+                continue
+        return None, None
+
+    async def _maybe_reverse_geocode(self, lat: float, lon: float):
+        """Throttle and reverse-geocode if moved enough and interval elapsed."""
+        now = monotonic()
+        # interval check
+        if now - self._last_lookup_ts < self._min_interval_min * 60:
+            return
+        # distance check
+        if self._last_lookup_lat is not None and self._last_lookup_lon is not None:
+            moved = haversine_miles(self._last_lookup_lat, self._last_lookup_lon, lat, lon)
+            if moved < self._min_move_mi:
+                return
+
+        address = None
+        if self._geocode_provider == "nominatim":
+            address = await async_reverse_geocode(self.hass, lat, lon, contact=self._geocode_contact)
+
+        if address:
+            # Set the label in state when we're in person-label mode; otherwise expose as attribute
+            if self._mode == SENSOR_MODE_PERSON_LABEL:
+                self._state = str(address)
+            else:
+                self._extra_attrs[self._label_attr] = str(address)
+            # update throttle state
+            self._last_lookup_ts = now
+            self._last_lookup_lat = lat
+            self._last_lookup_lon = lon
+            self.async_write_ha_state()
 
     @property
     def state(self):

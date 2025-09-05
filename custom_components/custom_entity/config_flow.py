@@ -27,7 +27,7 @@ from .const import (
     CONF_COMBINE_LABEL_PRECISION,
     CONF_COMBINE_ATTR_PRECISION,
     DEFAULT_COMBINE_PRECISION,
-    # NEW: person-label support
+    # person label + auto-address
     CONF_SENSOR_MODE,
     SENSOR_MODE_MIRROR,
     SENSOR_MODE_PERSON_LABEL,
@@ -36,6 +36,16 @@ from .const import (
     DEFAULT_LABEL_ATTR,
     SELECT_PERSON,
     SELECT_DEVICE_TRACKER,
+    CONF_AUTO_ADDRESS,
+    CONF_ADDRESS_MIN_MOVE_MI,
+    CONF_ADDRESS_MIN_INTERVAL_MIN,
+    CONF_GEOCODE_PROVIDER,
+    CONF_GEOCODE_CONTACT,
+    DEFAULT_ADDRESS_MIN_MOVE_MI,
+    DEFAULT_ADDRESS_MIN_INTERVAL_MIN,
+    DEFAULT_GEOCODE_PROVIDER,
+    SELECT_MILES_SLIDER,
+    SELECT_MINUTES_SLIDER,
 )
 
 SENSOR_MODE_OPTIONS = [
@@ -61,7 +71,6 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input=None):
         if user_input is not None:
-            # Normalize to strings
             platform = str(user_input[CONF_PLATFORM])
             friendly = str(user_input[CONF_FRIENDLY_NAME])
             source = str(user_input.get(CONF_SOURCE_ENTITY) or "")
@@ -74,19 +83,15 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_FRIENDLY_NAME: friendly,
                 CONF_SOURCE_ENTITY: source,
             }
-
-            # Optional presence helper (meaningful mostly for device_tracker)
             if presence:
                 data[CONF_PRESENCE_HELPER] = presence
 
-            # For sensor platform we allow an explicit mode
             if platform == "sensor":
                 data[CONF_SENSOR_MODE] = sensor_mode
                 if sensor_mode == SENSOR_MODE_PERSON_LABEL:
                     self._data = data
                     return await self.async_step_person_label_details()
 
-            # Pre-fill device_class if that platform supports it
             if platform in PLATFORMS_WITH_DEVICE_CLASS:
                 dc = _guess_device_class(self.hass, source)
                 if dc:
@@ -103,7 +108,6 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_FRIENDLY_NAME): str,
                 vol.Optional(CONF_SOURCE_ENTITY): SELECT_ANY_ENTITY,
                 vol.Optional(CONF_PRESENCE_HELPER): SELECT_ANY_ENTITY,
-                # NEW (only used if platform == sensor)
                 vol.Optional(CONF_SENSOR_MODE, default=SENSOR_MODE_MIRROR): selector({
                     "select": {"options": SENSOR_MODE_OPTIONS, "mode": "list"}
                 }),
@@ -114,15 +118,29 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Only when platform=sensor and sensor_mode=person_label."""
         if user_input is not None:
             self._data[CONF_PERSON_ENTITY] = str(user_input[CONF_PERSON_ENTITY])
-            # If source entity wasn't provided earlier, require a device_tracker now
             self._data[CONF_SOURCE_ENTITY] = str(user_input.get(CONF_SOURCE_ENTITY) or user_input["tracker_entity"])
             self._data[CONF_LABEL_ATTR] = str(user_input.get(CONF_LABEL_ATTR) or DEFAULT_LABEL_ATTR).strip()
+            # auto-address controls
+            self._data[CONF_AUTO_ADDRESS] = bool(user_input.get(CONF_AUTO_ADDRESS, True))
+            self._data[CONF_ADDRESS_MIN_MOVE_MI] = float(user_input.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
+            self._data[CONF_ADDRESS_MIN_INTERVAL_MIN] = int(user_input.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
+            self._data[CONF_GEOCODE_PROVIDER] = str(user_input.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER))
+            contact = user_input.get(CONF_GEOCODE_CONTACT)
+            if contact:
+                self._data[CONF_GEOCODE_CONTACT] = str(contact)
             return await self.async_step_inherit_attrs()
 
         schema = vol.Schema({
             vol.Required(CONF_PERSON_ENTITY): SELECT_PERSON,
             vol.Optional("tracker_entity", default=self._data.get(CONF_SOURCE_ENTITY, "")): SELECT_DEVICE_TRACKER,
             vol.Optional(CONF_LABEL_ATTR, default=DEFAULT_LABEL_ATTR): str,
+            vol.Optional(CONF_AUTO_ADDRESS, default=True): bool,
+            vol.Optional(CONF_ADDRESS_MIN_MOVE_MI, default=DEFAULT_ADDRESS_MIN_MOVE_MI): SELECT_MILES_SLIDER,
+            vol.Optional(CONF_ADDRESS_MIN_INTERVAL_MIN, default=DEFAULT_ADDRESS_MIN_INTERVAL_MIN): SELECT_MINUTES_SLIDER,
+            vol.Optional(CONF_GEOCODE_PROVIDER, default=DEFAULT_GEOCODE_PROVIDER): selector({
+                "select": {"options": [{"label": "OSM Nominatim (free)", "value": "nominatim"}], "mode": "list"}
+            }),
+            vol.Optional(CONF_GEOCODE_CONTACT): str,
         })
         return self.async_show_form(step_id="person_label_details", data_schema=schema)
 
@@ -136,10 +154,6 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         attrs = []
         src_id = self._data.get(CONF_SOURCE_ENTITY) or "source entity"
-        st = self.hass.states.get(self._data.get(CONF_SOURCE_ENTITY))
-        if st:
-            attrs = list(st.attributes.keys())
-
         return self.async_show_form(
             step_id="inherit_attrs",
             data_schema=vol.Schema({
@@ -147,9 +161,9 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "select": {"options": attrs, "multiple": True, "mode": "dropdown"}
                 })
             }),
-            # provide the {source} placeholder used by translations
             description_placeholders={"source": src_id},
         )
+
 
     async def async_step_combine(self, user_input=None):
         if user_input is not None:
@@ -171,13 +185,11 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 self._data[CONF_COMBINE] = False
 
-            # If platform supports device_class but we never guessed it, let the user type/choose now.
             if self._data[CONF_PLATFORM] in PLATFORMS_WITH_DEVICE_CLASS:
                 return await self.async_step_device_class()
 
             return self.async_create_entry(title=self._data[CONF_FRIENDLY_NAME], data=self._data)
 
-        # combine UI
         return self.async_show_form(
             step_id="combine",
             data_schema=vol.Schema({
@@ -202,7 +214,7 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._data[CONF_DEVICE_CLASS] = str(dc)
             return self.async_create_entry(title=self._data[CONF_FRIENDLY_NAME], data=self._data)
 
-        guessed = self._data.get(CONF_DEVICE_CLASS)  # maybe set earlier
+        guessed = self._data.get(CONF_DEVICE_CLASS)
         if suggestions:
             schema = vol.Schema({
                 vol.Optional(CONF_DEVICE_CLASS, default=guessed or suggestions[0]): selector({
