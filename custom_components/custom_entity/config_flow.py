@@ -1,4 +1,4 @@
-"""Config flow for Custom Entity (adds optional Person pick for device_tracker picture)."""
+"""Config flow for Custom Entity (adds optional Person pick + tracker auto-address step)."""
 from __future__ import annotations
 
 import voluptuous as vol
@@ -27,26 +27,14 @@ from .const import (
     CONF_COMBINE_LABEL_PRECISION,
     CONF_COMBINE_ATTR_PRECISION,
     DEFAULT_COMBINE_PRECISION,
-    # sensor person-label mode (unchanged)
+    # sensor person-label mode
     CONF_SENSOR_MODE,
     SENSOR_MODE_MIRROR,
     SENSOR_MODE_PERSON_LABEL,
     CONF_PERSON_ENTITY,
-    CONF_PERSON_ENTITY as _CONF_PERSON_FOR_TRACKER,  # same key, used for tracker too
-    CONF_PERSON_ENTITY,
-    CONF_PERSON_ENTITY,
-    CONF_PERSON_ENTITY,
-    CONF_PERSON_ENTITY,
-    CONF_PERSON_ENTITY,
-    CONF_PERSON_ENTITY,
-    CONF_PERSON_ENTITY,
-    # (selectors)
-    SELECT_PERSON,
-    SELECT_DEVICE_TRACKER,
-    # auto-address fields for sensor person-label
-    CONF_PERSON_ENTITY,
     CONF_LABEL_ATTR,
     DEFAULT_LABEL_ATTR,
+    # auto-address
     CONF_AUTO_ADDRESS,
     CONF_ADDRESS_MIN_MOVE_MI,
     CONF_ADDRESS_MIN_INTERVAL_MIN,
@@ -55,6 +43,9 @@ from .const import (
     DEFAULT_ADDRESS_MIN_MOVE_MI,
     DEFAULT_ADDRESS_MIN_INTERVAL_MIN,
     DEFAULT_GEOCODE_PROVIDER,
+    # selectors
+    SELECT_PERSON,
+    SELECT_DEVICE_TRACKER,
     SELECT_MILES_SLIDER,
     SELECT_MINUTES_SLIDER,
 )
@@ -86,7 +77,7 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             presence = user_input.get(CONF_PRESENCE_HELPER)
             presence = str(presence) if presence else None
             sensor_mode = user_input.get(CONF_SENSOR_MODE, SENSOR_MODE_MIRROR)
-            person = user_input.get(CONF_PERSON_ENTITY)  # optional manual person for device_tracker
+            person = user_input.get(CONF_PERSON_ENTITY)  # optional manual person (used for tracker picture)
 
             data = {
                 CONF_PLATFORM: platform,
@@ -104,6 +95,12 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     self._data = data
                     return await self.async_step_person_label_details()
 
+            if platform == "device_tracker":
+                # collect reverse-geocode knobs now
+                self._data = data
+                return await self.async_step_tracker_details()
+
+            # Pre-fill device_class if that platform supports it
             if platform in PLATFORMS_WITH_DEVICE_CLASS:
                 dc = _guess_device_class(self.hass, source)
                 if dc:
@@ -128,7 +125,38 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }),
         )
 
+    async def async_step_tracker_details(self, user_input=None):
+        """Device_tracker-only: collect auto-address (reverse geocode) knobs."""
+        if user_input is not None:
+            tracker = user_input.get("tracker_entity") or self._data.get(CONF_SOURCE_ENTITY)
+            self._data[CONF_SOURCE_ENTITY] = str(tracker) if tracker else ""
+
+            self._data[CONF_LABEL_ATTR] = str(user_input.get(CONF_LABEL_ATTR) or DEFAULT_LABEL_ATTR).strip()
+            self._data[CONF_AUTO_ADDRESS] = bool(user_input.get(CONF_AUTO_ADDRESS, True))
+            self._data[CONF_ADDRESS_MIN_MOVE_MI] = float(user_input.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
+            self._data[CONF_ADDRESS_MIN_INTERVAL_MIN] = int(user_input.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
+            self._data[CONF_GEOCODE_PROVIDER] = str(user_input.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER))
+            contact = user_input.get(CONF_GEOCODE_CONTACT)
+            if contact is not None:
+                self._data[CONF_GEOCODE_CONTACT] = str(contact)
+
+            return await self.async_step_inherit_attrs()
+
+        schema = vol.Schema({
+            vol.Optional("tracker_entity", default=self._data.get(CONF_SOURCE_ENTITY, "")): SELECT_DEVICE_TRACKER,
+            vol.Optional(CONF_LABEL_ATTR, default=DEFAULT_LABEL_ATTR): str,
+            vol.Optional(CONF_AUTO_ADDRESS, default=True): bool,
+            vol.Optional(CONF_ADDRESS_MIN_MOVE_MI, default=DEFAULT_ADDRESS_MIN_MOVE_MI): SELECT_MILES_SLIDER,
+            vol.Optional(CONF_ADDRESS_MIN_INTERVAL_MIN, default=DEFAULT_ADDRESS_MIN_INTERVAL_MIN): SELECT_MINUTES_SLIDER,
+            vol.Optional(CONF_GEOCODE_PROVIDER, default=DEFAULT_GEOCODE_PROVIDER): selector({
+                "select": {"options": [{"label": "OSM Nominatim (free)", "value": "nominatim"}], "mode": "list"}
+            }),
+            vol.Optional(CONF_GEOCODE_CONTACT): str,
+        })
+        return self.async_show_form(step_id="tracker_details", data_schema=schema)
+
     async def async_step_person_label_details(self, user_input=None):
+        """Sensor-only when sensor_mode=person_label."""
         if user_input is not None:
             self._data[CONF_PERSON_ENTITY] = str(user_input[CONF_PERSON_ENTITY])
             self._data[CONF_SOURCE_ENTITY] = str(user_input.get(CONF_SOURCE_ENTITY) or user_input["tracker_entity"])

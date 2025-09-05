@@ -14,6 +14,19 @@
           "sensor_mode": "Sensor mode"
         }
       },
+      "tracker_details": {
+        "title": "Tracker details",
+        "description": "Configure the address attribute and reverse geocoding for this tracker.",
+        "data": {
+          "tracker_entity": "Device tracker (source)",
+          "label_attr": "Address attribute name",
+          "auto_address": "Auto-address from GPS (reverse geocode)",
+          "address_min_move_mi": "Only update after moving (miles)",
+          "address_min_interval_min": "Minimum minutes between lookups",
+          "geocode_provider": "Reverse geocode provider",
+          "geocode_contact": "Contact info for provider (email/URL)"
+        }
+      },
       "person_label_details": {
         "title": "Person Label details",
         "description": "Creates a sensor that shows a label (e.g., address) from a Person or its tracker. This is a sensor, not a Person entity.",
