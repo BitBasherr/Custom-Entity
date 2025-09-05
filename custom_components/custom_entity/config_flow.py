@@ -1,4 +1,4 @@
-"""Config flow for Custom Entity."""
+"""Config flow for Custom Entity (adds optional Person pick for device_tracker picture)."""
 from __future__ import annotations
 
 import voluptuous as vol
@@ -27,15 +27,26 @@ from .const import (
     CONF_COMBINE_LABEL_PRECISION,
     CONF_COMBINE_ATTR_PRECISION,
     DEFAULT_COMBINE_PRECISION,
-    # person label + auto-address
+    # sensor person-label mode (unchanged)
     CONF_SENSOR_MODE,
     SENSOR_MODE_MIRROR,
     SENSOR_MODE_PERSON_LABEL,
     CONF_PERSON_ENTITY,
-    CONF_LABEL_ATTR,
-    DEFAULT_LABEL_ATTR,
+    CONF_PERSON_ENTITY as _CONF_PERSON_FOR_TRACKER,  # same key, used for tracker too
+    CONF_PERSON_ENTITY,
+    CONF_PERSON_ENTITY,
+    CONF_PERSON_ENTITY,
+    CONF_PERSON_ENTITY,
+    CONF_PERSON_ENTITY,
+    CONF_PERSON_ENTITY,
+    CONF_PERSON_ENTITY,
+    # (selectors)
     SELECT_PERSON,
     SELECT_DEVICE_TRACKER,
+    # auto-address fields for sensor person-label
+    CONF_PERSON_ENTITY,
+    CONF_LABEL_ATTR,
+    DEFAULT_LABEL_ATTR,
     CONF_AUTO_ADDRESS,
     CONF_ADDRESS_MIN_MOVE_MI,
     CONF_ADDRESS_MIN_INTERVAL_MIN,
@@ -46,10 +57,6 @@ from .const import (
     DEFAULT_GEOCODE_PROVIDER,
     SELECT_MILES_SLIDER,
     SELECT_MINUTES_SLIDER,
-    # NEW: combine conversion
-    CONF_COMBINE_UNIT_MODE,
-    CONF_COMBINE_SUFFIX,
-    SELECT_COMBINE_UNIT_MODE,
 )
 
 SENSOR_MODE_OPTIONS = [
@@ -69,8 +76,6 @@ def _guess_device_class(hass, entity_id: str) -> str | None:
 
 
 class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Wizard style setup; mirrors Options flow fields."""
-
     VERSION = 1
 
     async def async_step_user(self, user_input=None):
@@ -81,6 +86,7 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             presence = user_input.get(CONF_PRESENCE_HELPER)
             presence = str(presence) if presence else None
             sensor_mode = user_input.get(CONF_SENSOR_MODE, SENSOR_MODE_MIRROR)
+            person = user_input.get(CONF_PERSON_ENTITY)  # optional manual person for device_tracker
 
             data = {
                 CONF_PLATFORM: platform,
@@ -89,6 +95,8 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }
             if presence:
                 data[CONF_PRESENCE_HELPER] = presence
+            if person:
+                data[CONF_PERSON_ENTITY] = str(person)
 
             if platform == "sensor":
                 data[CONF_SENSOR_MODE] = sensor_mode
@@ -104,6 +112,7 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data = data
             return await self.async_step_inherit_attrs()
 
+        # Always show optional Person picker; harmless for non-trackers.
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema({
@@ -111,6 +120,7 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "options": SUPPORTED_PLATFORMS, "mode": "dropdown"}}),
                 vol.Required(CONF_FRIENDLY_NAME): str,
                 vol.Optional(CONF_SOURCE_ENTITY): SELECT_ANY_ENTITY,
+                vol.Optional(CONF_PERSON_ENTITY): SELECT_PERSON,
                 vol.Optional(CONF_PRESENCE_HELPER): SELECT_ANY_ENTITY,
                 vol.Optional(CONF_SENSOR_MODE, default=SENSOR_MODE_MIRROR): selector({
                     "select": {"options": SENSOR_MODE_OPTIONS, "mode": "list"}
@@ -119,12 +129,10 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_person_label_details(self, user_input=None):
-        """Only when platform=sensor and sensor_mode=person_label."""
         if user_input is not None:
             self._data[CONF_PERSON_ENTITY] = str(user_input[CONF_PERSON_ENTITY])
             self._data[CONF_SOURCE_ENTITY] = str(user_input.get(CONF_SOURCE_ENTITY) or user_input["tracker_entity"])
             self._data[CONF_LABEL_ATTR] = str(user_input.get(CONF_LABEL_ATTR) or DEFAULT_LABEL_ATTR).strip()
-            # auto-address controls
             self._data[CONF_AUTO_ADDRESS] = bool(user_input.get(CONF_AUTO_ADDRESS, True))
             self._data[CONF_ADDRESS_MIN_MOVE_MI] = float(user_input.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
             self._data[CONF_ADDRESS_MIN_INTERVAL_MIN] = int(user_input.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
@@ -176,13 +184,10 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             combine_on = bool(user_input.get(CONF_COMBINE, False))
             if combine_on:
-                combine_entity = str(user_input.get(CONF_COMBINE_ENTITY) or "")
+                combine_entity = str(user_input[CONF_COMBINE_ENTITY])
                 label_prec = int(str(user_input.get(CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION)))
                 attr_prec = int(str(user_input.get(CONF_COMBINE_ATTR_PRECISION, label_prec)))
                 hyphen = bool(user_input.get(CONF_HYPHENATE_STATE, False))
-                # NEW
-                unit_mode = str(user_input.get(CONF_COMBINE_UNIT_MODE, "auto")).strip().lower()
-                suffix = (user_input.get(CONF_COMBINE_SUFFIX) or "").strip()
 
                 self._data.update({
                     CONF_COMBINE: True,
@@ -191,30 +196,26 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_HYPHENATE_STATE: hyphen,
                     CONF_COMBINE_LABEL_PRECISION: label_prec,
                     CONF_COMBINE_ATTR_PRECISION: attr_prec,
-                    CONF_COMBINE_UNIT_MODE: unit_mode,
-                    CONF_COMBINE_SUFFIX: suffix,
                 })
             else:
                 self._data[CONF_COMBINE] = False
 
-            if self._data.get("platform") in PLATFORMS_WITH_DEVICE_CLASS:
+            if self._data[CONF_PLATFORM] in PLATFORMS_WITH_DEVICE_CLASS:
                 return await self.async_step_device_class()
 
-            return self.async_create_entry(title=self._data["friendly_name"], data=self._data)
+            return self.async_create_entry(title=self._data[CONF_FRIENDLY_NAME], data=self._data)
 
-        # Schema (with NEW fields)
-        schema = vol.Schema({
-            vol.Required(CONF_COMBINE, default=False): bool,
-            vol.Optional(CONF_COMBINE_ENTITY): SELECT_ANY_ENTITY,
-            vol.Optional(CONF_COMBINE_ATTR_NAME, default="combine"): str,
-            vol.Optional(CONF_HYPHENATE_STATE, default=True): bool,
-            vol.Optional(CONF_COMBINE_LABEL_PRECISION, default=str(DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
-            vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=str(DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
-            # NEW
-            vol.Optional(CONF_COMBINE_UNIT_MODE, default="auto"): SELECT_COMBINE_UNIT_MODE,
-            vol.Optional(CONF_COMBINE_SUFFIX, default=""): selector({"text": {}}),
-        })
-        return self.async_show_form(step_id="combine", data_schema=schema)
+        return self.async_show_form(
+            step_id="combine",
+            data_schema=vol.Schema({
+                vol.Required(CONF_COMBINE, default=False): bool,
+                vol.Optional(CONF_COMBINE_ENTITY): SELECT_ANY_ENTITY,
+                vol.Optional(CONF_COMBINE_ATTR_NAME, default="combine"): str,
+                vol.Optional(CONF_HYPHENATE_STATE, default=True): bool,
+                vol.Optional(CONF_COMBINE_LABEL_PRECISION, default=str(DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
+                vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=str(DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
+            }),
+        )
 
     async def async_step_device_class(self, user_input=None):
         platform = self._data[CONF_PLATFORM]

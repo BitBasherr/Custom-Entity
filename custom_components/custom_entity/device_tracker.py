@@ -1,4 +1,5 @@
-"""Custom device_tracker with mirror, presence helper, optional Combine (hyphenate), Auto-address (structured), and combine conversion/suffix."""
+"""Custom device_tracker with mirror, presence helper, optional Combine (hyphenate),
+Auto-address (structured), and Person picture sync (manual override + auto-detect)."""
 from __future__ import annotations
 
 import asyncio
@@ -39,9 +40,8 @@ from .const import (
     CONF_GEOCODE_CONTACT,
     DEFAULT_ADDRESS_MIN_MOVE_MI,
     DEFAULT_ADDRESS_MIN_INTERVAL_MIN,
-    # NEW: conversion + suffix
-    CONF_COMBINE_UNIT_MODE,
-    CONF_COMBINE_SUFFIX,
+    # person link (manual override)
+    CONF_PERSON_ENTITY,
 )
 
 from .geocode import async_reverse_geocode, haversine_miles
@@ -96,14 +96,8 @@ def _unit_hint(state_str: str, attrs: dict) -> Optional[str]:
     return None
 
 
-def _convert_to_minutes(val: float, mode: str, unit_hint: Optional[str]) -> tuple[float, bool]:
-    mode = (mode or "auto").lower()
-    if mode == "sec_to_min":
-        return (val / 60.0, True)
-    if mode == "hr_to_min":
-        return (val * 60.0, True)
-    if mode == "none":
-        return (val, False)
+def _convert_to_minutes_auto(val: float, unit_hint: Optional[str]) -> tuple[float, bool]:
+    """Convert seconds/hours to minutes if we can infer it; return (value, converted?)."""
     if unit_hint in ("s", "sec", "second", "seconds"):
         return (val / 60.0, True)
     if unit_hint in ("h", "hr", "hrs", "hour", "hours"):
@@ -116,7 +110,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
 
 class CustomTrackerEntity(TrackerEntity):
-    """Mirror a source tracker’s lat/lon/attrs, presence helper override, Combine with optional hyphenation, and reverse-geocoded structured address."""
+    """Mirror a source tracker’s lat/lon/attrs, presence helper override,
+    Combine with optional hyphenation, reverse-geocoded structured address,
+    and Person picture sync (manual override or auto-detect)."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
         self.hass = hass
@@ -132,6 +128,10 @@ class CustomTrackerEntity(TrackerEntity):
         self._source_entity: str = d.get(CONF_SOURCE_ENTITY, "")
         self._inherit_attrs: list[str] = d.get(CONF_INHERIT_ATTRS, [])
 
+        # manual person override (may be None)
+        self._person_entity: Optional[str] = d.get(CONF_PERSON_ENTITY)
+        self._resolved_person: Optional[str] = None  # auto-detected at runtime if no manual override
+
         # extras
         self._battery_entity: Optional[str] = o.get(CONF_BATTERY_ENTITY)
         self._extra_map: dict[str, str] = o.get(CONF_ATTRIBUTE_SENSORS, {})
@@ -146,8 +146,6 @@ class CustomTrackerEntity(TrackerEntity):
         self._hyphenate: bool = bool(o.get(CONF_HYPHENATE_STATE, d.get(CONF_HYPHENATE_STATE, False)))
         self._label_prec: int = _to_int(o.get(CONF_COMBINE_LABEL_PRECISION, d.get(CONF_COMBINE_LABEL_PRECISION, 1)), 1)
         self._attr_prec: int = _to_int(o.get(CONF_COMBINE_ATTR_PRECISION, d.get(CONF_COMBINE_ATTR_PRECISION, 1)), 1)
-        self._unit_mode = (o.get(CONF_COMBINE_UNIT_MODE, d.get(CONF_COMBINE_UNIT_MODE, "auto")) or "auto").lower()
-        self._suffix = o.get(CONF_COMBINE_SUFFIX, d.get(CONF_COMBINE_SUFFIX, "")) or ""
 
         # auto-address
         self._label_attr: str = d.get(CONF_LABEL_ATTR, DEFAULT_LABEL_ATTR) or DEFAULT_LABEL_ATTR  # usually "address"
@@ -168,6 +166,9 @@ class CustomTrackerEntity(TrackerEntity):
         self._last_lookup_ts = 0.0
         self._last_lookup_lat: Optional[float] = None
         self._last_lookup_lon: Optional[float] = None
+
+        # picture cache
+        self._attr_entity_picture: Optional[str] = None
 
     # ---------- TrackerEntity core ----------
     @property
@@ -215,12 +216,10 @@ class CustomTrackerEntity(TrackerEntity):
             if co is not None:
                 num = _float_from_state(co.state)
                 if num is not None:
-                    minutes, applied = _convert_to_minutes(num, self._unit_mode, _unit_hint(co.state, co.attributes or {}))
-                    txt = _fmt_number(minutes if applied else num, self._label_prec)
-                    use_suffix = self._suffix
-                    if not use_suffix and (applied or self._unit_mode in ("sec_to_min", "hr_to_min")):
-                        use_suffix = " min"
-                    return f"{base} - {txt}{use_suffix}" if use_suffix else f"{base} - {txt}"
+                    minutes, converted = _convert_to_minutes_auto(num, _unit_hint(co.state, co.attributes or {}))
+                    txt = _fmt_number(minutes if converted else num, self._label_prec)
+                    suffix = " min" if converted else ""
+                    return f"{base} - {txt}{suffix}"
                 return f"{base} - {co.state}"
             return base
 
@@ -248,12 +247,51 @@ class CustomTrackerEntity(TrackerEntity):
         for ent in self._extra_map.values():
             self.async_on_remove(track(self.hass, [ent], self._on_event))
 
+        # Watch manual person or auto-detected person
+        target_person = self._person_entity or self._find_linked_person()
+        self._resolved_person = None if self._person_entity else target_person
+        if target_person:
+            self.async_on_remove(track(self.hass, [target_person], self._on_event))
+
         self._refresh()
         self.async_write_ha_state()
 
     async def _on_event(self, _):
         self._refresh()
         self.async_write_ha_state()
+
+    # ---------- picture + person helpers ----------
+    def _find_linked_person(self) -> Optional[str]:
+        """Find a person.* whose 'source' equals this entity or our source tracker."""
+        try:
+            persons = [st for st in self.hass.states.async_all("person")]
+        except Exception:
+            return None
+        for p in persons:
+            src = p.attributes.get("source")
+            if not src:
+                continue
+            if src == getattr(self, "entity_id", None) or src == self._source_entity:
+                return p.entity_id
+        return None
+
+    def _update_picture(self):
+        """Prefer Person picture; fall back to source tracker picture."""
+        picture = None
+
+        # Manual person overrides auto
+        person_id = self._person_entity or self._resolved_person
+        if person_id:
+            st = self.hass.states.get(person_id)
+            if st:
+                picture = st.attributes.get("entity_picture") or st.attributes.get("entity_picture_local")
+
+        if not picture and self._source_entity:
+            st = self.hass.states.get(self._source_entity)
+            if st:
+                picture = st.attributes.get("entity_picture") or st.attributes.get("entity_picture_local")
+
+        self._attr_entity_picture = picture or None
 
     def _apply_address_to_attrs(self, info: Dict[str, Any]):
         """Write structured address into attributes."""
@@ -272,6 +310,16 @@ class CustomTrackerEntity(TrackerEntity):
     # ---------- update helpers ----------
     def _refresh(self):
         self._extra_attrs = {}
+
+        # If no manual person, keep auto-detecting and start listening when it changes
+        if not self._person_entity:
+            new_person = self._find_linked_person()
+            if new_person and new_person != self._resolved_person:
+                # start listening to this person too
+                self.async_on_remove(
+                    async_track_state_change_event(self.hass, [new_person], self._on_event)
+                )
+                self._resolved_person = new_person
 
         # mirror from source tracker
         src = self.hass.states.get(self._source_entity) if self._source_entity else None
@@ -303,14 +351,14 @@ class CustomTrackerEntity(TrackerEntity):
             if st is not None:
                 self._extra_attrs[friendly] = st.state
 
-        # combine as attribute when NOT hyphenating (apply conversion; no suffix in attribute)
+        # combine as attribute when NOT hyphenating (no suffix in attribute)
         if self._combine and self._combine_entity and not self._hyphenate:
             co = self.hass.states.get(self._combine_entity)
             if co:
                 num = _float_from_state(co.state)
                 if num is not None:
-                    minutes, applied = _convert_to_minutes(num, self._unit_mode, _unit_hint(co.state, co.attributes or {}))
-                    val = minutes if applied else num
+                    minutes, converted = _convert_to_minutes_auto(num, _unit_hint(co.state, co.attributes or {}))
+                    val = minutes if converted else num
                     self._extra_attrs[self._combine_attr_name or "combine"] = _fmt_number(val, self._attr_prec)
                 else:
                     self._extra_attrs[self._combine_attr_name or "combine"] = str(co.state)
@@ -322,6 +370,9 @@ class CustomTrackerEntity(TrackerEntity):
         # persist last known structured address
         if self._address_cache:
             self._apply_address_to_attrs(self._address_cache)
+
+        # update picture from person/source
+        self._update_picture()
 
     async def _maybe_reverse_geocode(self, lat: float, lon: float):
         now = monotonic()

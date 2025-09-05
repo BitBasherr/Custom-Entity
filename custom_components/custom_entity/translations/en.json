@@ -9,6 +9,7 @@
           "platform": "Platform",
           "friendly_name": "Friendly name",
           "source_entity": "Source entity",
+          "person_entity": "Person (optional; used for picture)",
           "presence_helper": "Presence helper (optional)",
           "sensor_mode": "Sensor mode"
         }

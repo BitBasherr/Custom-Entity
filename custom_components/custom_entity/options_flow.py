@@ -1,4 +1,4 @@
-"""Options flow exposing all Config Flow capabilities + extras (incl. Person Label & Auto-address)."""
+"""Options flow exposing Config Flow capabilities + extras (adds optional Person pick for device_tracker picture)."""
 from __future__ import annotations
 
 from typing import Any, Dict, List
@@ -9,7 +9,6 @@ from homeassistant.core import callback
 from homeassistant.helpers.selector import selector
 
 from .const import (
-    DOMAIN,
     # platform & capability tables
     SUPPORTED_PLATFORMS,
     PLATFORMS_WITH_DEVICE_CLASS,
@@ -20,11 +19,11 @@ from .const import (
     CONF_FRIENDLY_NAME,
     CONF_DEVICE_CLASS,
     CONF_INHERIT_ATTRS,
-    # person-label + auto-address (entry.data)
+    CONF_PERSON_ENTITY,
+    # sensor person-label bits (unchanged)
     CONF_SENSOR_MODE,
     SENSOR_MODE_MIRROR,
     SENSOR_MODE_PERSON_LABEL,
-    CONF_PERSON_ENTITY,
     CONF_LABEL_ATTR,
     DEFAULT_LABEL_ATTR,
     CONF_AUTO_ADDRESS,
@@ -43,7 +42,7 @@ from .const import (
     CONF_COMBINE_ATTR_PRECISION,
     CONF_COMBINE_ENTITY,
     CONF_COMBINE_LABEL_PRECISION,
-    CONF_COMBINE_PRECISION,  # legacy (back-compat)
+    CONF_COMBINE_PRECISION,
     CONF_HYPHENATE_STATE,
     CONF_PRESENCE_HELPER,
     DEFAULT_COMBINE_PRECISION,
@@ -54,10 +53,6 @@ from .const import (
     SELECT_PRECISION,
     SELECT_MILES_SLIDER,
     SELECT_MINUTES_SLIDER,
-    # NEW combine conversion
-    CONF_COMBINE_UNIT_MODE,
-    CONF_COMBINE_SUFFIX,
-    SELECT_COMBINE_UNIT_MODE,
     # bridge markers
     OPT_APPLY_DATA_UPDATE,
     DATA_MUTABLE_KEYS,
@@ -130,9 +125,9 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         name_now = data_now.get(CONF_FRIENDLY_NAME, "")
         source_now = data_now.get(CONF_SOURCE_ENTITY, "")
         device_class_now = data_now.get(CONF_DEVICE_CLASS)
+        person_now = data_now.get(CONF_PERSON_ENTITY, "")
 
         mode_now = data_now.get(CONF_SENSOR_MODE, SENSOR_MODE_MIRROR)
-        person_now = data_now.get(CONF_PERSON_ENTITY, "")
         label_attr_now = data_now.get(CONF_LABEL_ATTR, DEFAULT_LABEL_ATTR)
 
         auto_now = bool(data_now.get(CONF_AUTO_ADDRESS, True))
@@ -161,16 +156,18 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             else:
                 fields[vol.Optional(CONF_DEVICE_CLASS, default=default_dc)] = str
 
+        # Optional person picker for device_tracker (shows even if platform not set yet)
+        if (platform_now or "") == "device_tracker":
+            fields[vol.Optional(CONF_PERSON_ENTITY, default=person_now)] = SELECT_PERSON
+
+        # Sensor person-label controls (unchanged)
         if (platform_now or "") == "sensor":
             fields[vol.Optional(CONF_SENSOR_MODE, default=mode_now)] = selector({
                 "select": {"options": [{"label":"Mirror (default)","value":SENSOR_MODE_MIRROR},
                                        {"label":"Person Label (sensor)","value":SENSOR_MODE_PERSON_LABEL}], "mode": "list"}
             })
             if mode_now == SENSOR_MODE_PERSON_LABEL:
-                fields[vol.Required(CONF_PERSON_ENTITY, default=person_now)] = SELECT_PERSON
-                fields[vol.Optional(CONF_SOURCE_ENTITY, default=source_now)] = SELECT_DEVICE_TRACKER
                 fields[vol.Optional(CONF_LABEL_ATTR, default=label_attr_now)] = str
-                # auto-address knobs
                 fields[vol.Optional(CONF_AUTO_ADDRESS, default=auto_now)] = bool
                 fields[vol.Optional(CONF_ADDRESS_MIN_MOVE_MI, default=min_move_now)] = SELECT_MILES_SLIDER
                 fields[vol.Optional(CONF_ADDRESS_MIN_INTERVAL_MIN, default=min_interval_now)] = SELECT_MINUTES_SLIDER
@@ -189,6 +186,14 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             if CONF_SOURCE_ENTITY in user_input:
                 staged[CONF_SOURCE_ENTITY] = str(user_input.get(CONF_SOURCE_ENTITY) or "")
 
+            # person manual override for device_tracker
+            if staged[CONF_PLATFORM] == "device_tracker":
+                if CONF_PERSON_ENTITY in user_input and user_input.get(CONF_PERSON_ENTITY):
+                    staged[CONF_PERSON_ENTITY] = str(user_input.get(CONF_PERSON_ENTITY))
+                elif CONF_PERSON_ENTITY in user_input and not user_input.get(CONF_PERSON_ENTITY):
+                    # user cleared it
+                    staged.pop(CONF_PERSON_ENTITY, None)
+
             if staged[CONF_PLATFORM] in PLATFORMS_WITH_DEVICE_CLASS:
                 dc_val = user_input.get(CONF_DEVICE_CLASS)
                 if dc_val in (None, ""):
@@ -204,11 +209,8 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 mode_val = user_input.get(CONF_SENSOR_MODE, mode_now)
                 staged[CONF_SENSOR_MODE] = mode_val
                 if mode_val == SENSOR_MODE_PERSON_LABEL:
-                    if user_input.get(CONF_PERSON_ENTITY) or person_now:
-                        staged[CONF_PERSON_ENTITY] = str(user_input.get(CONF_PERSON_ENTITY, person_now))
                     if CONF_LABEL_ATTR in user_input:
                         staged[CONF_LABEL_ATTR] = str(user_input.get(CONF_LABEL_ATTR) or DEFAULT_LABEL_ATTR)
-                    # auto-address
                     staged[CONF_AUTO_ADDRESS] = bool(user_input.get(CONF_AUTO_ADDRESS, auto_now))
                     staged[CONF_ADDRESS_MIN_MOVE_MI] = float(user_input.get(CONF_ADDRESS_MIN_MOVE_MI, min_move_now))
                     staged[CONF_ADDRESS_MIN_INTERVAL_MIN] = int(user_input.get(CONF_ADDRESS_MIN_INTERVAL_MIN, min_interval_now))
@@ -262,9 +264,6 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             CONF_HYPHENATE_STATE: bool(o.get(CONF_HYPHENATE_STATE, d.get(CONF_HYPHENATE_STATE, True))),
             CONF_COMBINE_LABEL_PRECISION: str(o.get(CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION)),
             CONF_COMBINE_ATTR_PRECISION: str(o.get(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION)),
-            # NEW
-            CONF_COMBINE_UNIT_MODE: o.get(CONF_COMBINE_UNIT_MODE, d.get(CONF_COMBINE_UNIT_MODE, "auto")),
-            CONF_COMBINE_SUFFIX: o.get(CONF_COMBINE_SUFFIX, d.get(CONF_COMBINE_SUFFIX, "")),
         }
 
         schema = vol.Schema({
@@ -274,15 +273,11 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             vol.Optional(CONF_HYPHENATE_STATE, default=defaults[CONF_HYPHENATE_STATE]): bool,
             vol.Optional(CONF_COMBINE_LABEL_PRECISION, default=defaults[CONF_COMBINE_LABEL_PRECISION]): SELECT_PRECISION,
             vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=defaults[CONF_COMBINE_ATTR_PRECISION]): SELECT_PRECISION,
-            # NEW fields
-            vol.Optional(CONF_COMBINE_UNIT_MODE, default=defaults[CONF_COMBINE_UNIT_MODE]): SELECT_COMBINE_UNIT_MODE,
-            vol.Optional(CONF_COMBINE_SUFFIX, default=defaults[CONF_COMBINE_SUFFIX]): selector({"text": {}}),
         })
 
         if user_input is not None:
             combine_on = bool(user_input.get(CONF_COMBINE, False))
             new_opts = dict(o)
-
             if combine_on:
                 new_opts[CONF_COMBINE] = True
                 new_opts[CONF_COMBINE_ENTITY] = str(user_input.get(CONF_COMBINE_ENTITY, defaults[CONF_COMBINE_ENTITY]))
@@ -290,15 +285,14 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 new_opts[CONF_HYPHENATE_STATE] = bool(user_input.get(CONF_HYPHENATE_STATE, defaults[CONF_HYPHENATE_STATE]))
                 new_opts[CONF_COMBINE_LABEL_PRECISION] = str(user_input.get(CONF_COMBINE_LABEL_PRECISION, defaults[CONF_COMBINE_LABEL_PRECISION]))
                 new_opts[CONF_COMBINE_ATTR_PRECISION] = str(user_input.get(CONF_COMBINE_ATTR_PRECISION, defaults[CONF_COMBINE_ATTR_PRECISION]))
-                # NEW
-                new_opts[CONF_COMBINE_UNIT_MODE] = str(user_input.get(CONF_COMBINE_UNIT_MODE, "auto")).strip().lower()
-                new_opts[CONF_COMBINE_SUFFIX] = (user_input.get(CONF_COMBINE_SUFFIX) or "").strip()
             else:
                 new_opts[CONF_COMBINE] = False
                 for k in (
-                    CONF_COMBINE_ENTITY, CONF_COMBINE_ATTR_NAME, CONF_HYPHENATE_STATE,
-                    CONF_COMBINE_LABEL_PRECISION, CONF_COMBINE_ATTR_PRECISION,
-                    CONF_COMBINE_UNIT_MODE, CONF_COMBINE_SUFFIX,
+                    CONF_COMBINE_ENTITY,
+                    CONF_COMBINE_ATTR_NAME,
+                    CONF_HYPHENATE_STATE,
+                    CONF_COMBINE_LABEL_PRECISION,
+                    CONF_COMBINE_ATTR_PRECISION,
                 ):
                     new_opts.pop(k, None)
 
