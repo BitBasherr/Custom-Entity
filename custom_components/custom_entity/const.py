@@ -11,14 +11,6 @@ CONF_SOURCE_ENTITY = "source_entity"
 CONF_DEVICE_CLASS = "device_class"
 CONF_INHERIT_ATTRS = "inherit_attrs"
 
-# --- Sensor modes (only for the sensor platform)
-CONF_SENSOR_MODE = "sensor_mode"            # "mirror" | "person_label"
-SENSOR_MODE_MIRROR = "mirror"
-SENSOR_MODE_PERSON_LABEL = "person_label"
-CONF_PERSON_ENTITY = "person_entity"        # person.<id>
-CONF_LABEL_ATTR = "label_attr"              # attribute on tracker to label with
-DEFAULT_LABEL_ATTR = "address"
-
 # ---------------- Optional features (stored in entry.options) ------------
 CONF_BATTERY_ENTITY = "battery_entity"
 CONF_ATTRIBUTE_SENSORS = "attribute_sensors"  # mapping: {friendly_name: entity_id}
@@ -37,6 +29,15 @@ CONF_COMBINE_LABEL_PRECISION = "combine_label_precision"  # hyphenated label dec
 CONF_COMBINE_ATTR_PRECISION = "combine_attr_precision"    # attribute decimals (non-hyphen)
 CONF_COMBINE_PRECISION = "combine_precision"              # legacy single knob (back-compat)
 DEFAULT_COMBINE_PRECISION = 1
+
+# ---------------- New: Person Label sensor mode --------------------------
+CONF_SENSOR_MODE = "sensor_mode"
+SENSOR_MODE_MIRROR = "mirror"
+SENSOR_MODE_PERSON_LABEL = "person_label"
+
+CONF_PERSON_ENTITY = "person_entity"
+CONF_LABEL_ATTR = "label_attr"
+DEFAULT_LABEL_ATTR = "address"   # what you wanted to surface from trackers/person
 
 # ---------------- Supported platforms ------------------------------------
 SUPPORTED_PLATFORMS = [
@@ -102,7 +103,7 @@ DATA_MUTABLE_KEYS = {
     CONF_SOURCE_ENTITY,
     CONF_DEVICE_CLASS,
     CONF_INHERIT_ATTRS,
-    # NEW keys used by the Person Label sensor mode
+    # the new sensor mode fields live in data too (so options can change them)
     CONF_SENSOR_MODE,
     CONF_PERSON_ENTITY,
     CONF_LABEL_ATTR,

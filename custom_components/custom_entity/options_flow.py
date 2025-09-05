@@ -1,4 +1,4 @@
-"""Options flow exposing all Config Flow capabilities + extras, with nice selectors & precision fix."""
+"""Options flow exposing all Config Flow capabilities + extras (incl. Person Label), with nice selectors & precision fix."""
 from __future__ import annotations
 
 from typing import Any, Dict, List
@@ -20,7 +20,7 @@ from .const import (
     CONF_FRIENDLY_NAME,
     CONF_DEVICE_CLASS,
     CONF_INHERIT_ATTRS,
-    # sensor modes (NEW)
+    # person-label additions (entry.data)
     CONF_SENSOR_MODE,
     SENSOR_MODE_MIRROR,
     SENSOR_MODE_PERSON_LABEL,
@@ -41,9 +41,9 @@ from .const import (
     DEFAULT_COMBINE_PRECISION,
     # selectors
     SELECT_ANY_ENTITY,
-    SELECT_PRECISION,
     SELECT_PERSON,
     SELECT_DEVICE_TRACKER,
+    SELECT_PRECISION,
     # bridge markers (applied in __init__.py update listener)
     OPT_APPLY_DATA_UPDATE,
     DATA_MUTABLE_KEYS,
@@ -67,8 +67,15 @@ def _guess_device_class(hass, entity_id: str) -> str | None:
 
 class CustomEntityOptionsFlow(config_entries.OptionsFlow):
     """
-    Your original menus preserved.
-    Core step now supports Sensor 'Person Label' mode without changing existing behavior.
+    Options wizard with:
+      • Core (platform, friendly name, source entity, device class, mode, person label details)
+      • Mirror attributes
+      • Combine (toggle, entity, attr name, hyphenate, precisions)
+      • Extras (battery, presence helper)
+      • Attribute sensors add/remove
+
+    Changing Core values is staged and written back to entry.data using an Options→Data bridge,
+    then the entry is reloaded (handled in __init__.py). Unique IDs remain stable.
     """
 
     def __init__(self, entry: config_entries.ConfigEntry):
@@ -84,6 +91,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 CONF_COMBINE_PRECISION, DEFAULT_COMBINE_PRECISION
             )
 
+    # ========= Menu =========
     async def async_step_init(self, user_input=None):
         return await self.async_step_menu()
 
@@ -115,15 +123,16 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         })
         return self.async_show_form(step_id="menu", data_schema=schema)
 
+    # ========= Core (DATA) =========
     async def async_step_core(self, user_input=None):
         data_now = dict(self.entry.data or {})
-        data_now.update(self._pending_data)
+        data_now.update(self._pending_data)  # show staged values
 
         platform_now = data_now.get(CONF_PLATFORM)
         name_now = data_now.get(CONF_FRIENDLY_NAME, "")
         source_now = data_now.get(CONF_SOURCE_ENTITY, "")
         device_class_now = data_now.get(CONF_DEVICE_CLASS)
-        sensor_mode_now = data_now.get(CONF_SENSOR_MODE, SENSOR_MODE_MIRROR)
+        mode_now = data_now.get(CONF_SENSOR_MODE, SENSOR_MODE_MIRROR)
         person_now = data_now.get(CONF_PERSON_ENTITY, "")
         label_attr_now = data_now.get(CONF_LABEL_ATTR, DEFAULT_LABEL_ATTR)
 
@@ -134,23 +143,10 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 "select": {"options": SUPPORTED_PLATFORMS, "mode": "dropdown"}
             }),
             vol.Required(CONF_FRIENDLY_NAME, default=name_now): str,
+            vol.Optional(CONF_SOURCE_ENTITY, default=source_now): SELECT_ANY_ENTITY,
         }
 
-        # Sensor-only additions
-        if (platform_now or "sensor") == "sensor":
-            fields[vol.Optional(CONF_SENSOR_MODE, default=sensor_mode_now)] = selector({
-                "select": {"options": SENSOR_MODE_OPTIONS, "mode": "list"}
-            })
-
-            if (sensor_mode_now or SENSOR_MODE_MIRROR) == SENSOR_MODE_PERSON_LABEL:
-                fields[vol.Required(CONF_PERSON_ENTITY, default=person_now)] = SELECT_PERSON
-                fields[vol.Required(CONF_SOURCE_ENTITY, default=source_now)] = SELECT_DEVICE_TRACKER
-                fields[vol.Optional(CONF_LABEL_ATTR, default=label_attr_now)] = str
-            else:
-                fields[vol.Required(CONF_SOURCE_ENTITY, default=source_now)] = SELECT_ANY_ENTITY
-        else:
-            fields[vol.Required(CONF_SOURCE_ENTITY, default=source_now)] = SELECT_ANY_ENTITY
-
+        # Device class (where applicable)
         if has_dc:
             suggestions: List[str] = DEVICE_CLASSES.get(platform_now, [])
             default_dc = device_class_now or _guess_device_class(self.hass, source_now) or ""
@@ -161,46 +157,54 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             else:
                 fields[vol.Optional(CONF_DEVICE_CLASS, default=default_dc)] = str
 
+        # Person Label mode (only for platform=sensor)
+        if (platform_now or "") == "sensor":
+            fields[vol.Optional(CONF_SENSOR_MODE, default=mode_now)] = selector({
+                "select": {"options": SENSOR_MODE_OPTIONS, "mode": "list"}
+            })
+            if mode_now == SENSOR_MODE_PERSON_LABEL:
+                fields[vol.Required(CONF_PERSON_ENTITY, default=person_now)] = SELECT_PERSON
+                # allow setting/overriding the tracker to read attributes from (fallback to source)
+                fields[vol.Optional(CONF_SOURCE_ENTITY, default=source_now)] = SELECT_DEVICE_TRACKER
+                fields[vol.Optional(CONF_LABEL_ATTR, default=label_attr_now)] = str
+
         schema = vol.Schema(fields)
 
         if user_input is not None:
+            # Base fields
             new_platform = str(user_input.get(CONF_PLATFORM, platform_now or "sensor"))
             new_name = str(user_input.get(CONF_FRIENDLY_NAME, name_now))
-
             staged = {
                 CONF_PLATFORM: new_platform,
                 CONF_FRIENDLY_NAME: new_name,
             }
 
-            # Sensor extras
-            if new_platform == "sensor":
-                new_mode = user_input.get(CONF_SENSOR_MODE, sensor_mode_now)
-                staged[CONF_SENSOR_MODE] = new_mode
+            # Source entity can be optional in person-label flow; store if provided
+            if CONF_SOURCE_ENTITY in user_input:
+                staged[CONF_SOURCE_ENTITY] = str(user_input.get(CONF_SOURCE_ENTITY) or "")
 
-                if new_mode == SENSOR_MODE_PERSON_LABEL:
-                    staged[CONF_PERSON_ENTITY] = str(user_input.get(CONF_PERSON_ENTITY, person_now))
-                    staged[CONF_SOURCE_ENTITY] = str(user_input.get(CONF_SOURCE_ENTITY, source_now))
-                    staged[CONF_LABEL_ATTR] = (user_input.get(CONF_LABEL_ATTR, label_attr_now) or DEFAULT_LABEL_ATTR).strip()
-                    # device_class not relevant for person label → drop
-                    staged.pop(CONF_DEVICE_CLASS, None)
-                else:
-                    staged[CONF_SOURCE_ENTITY] = str(user_input.get(CONF_SOURCE_ENTITY, source_now))
-            else:
-                staged[CONF_SOURCE_ENTITY] = str(user_input.get(CONF_SOURCE_ENTITY, source_now))
-
-            # device_class if applicable (skip when person-label)
-            if new_platform in PLATFORMS_WITH_DEVICE_CLASS and not (
-                new_platform == "sensor" and staged.get(CONF_SENSOR_MODE) == SENSOR_MODE_PERSON_LABEL
-            ):
+            # Device class
+            if new_platform in PLATFORMS_WITH_DEVICE_CLASS:
                 dc_val = user_input.get(CONF_DEVICE_CLASS)
                 if dc_val in (None, ""):
-                    dc_val = _guess_device_class(self.hass, staged.get(CONF_SOURCE_ENTITY))
+                    dc_val = _guess_device_class(self.hass, staged.get(CONF_SOURCE_ENTITY, source_now))
                 if dc_val:
                     staged[CONF_DEVICE_CLASS] = str(dc_val)
                 else:
                     staged.pop(CONF_DEVICE_CLASS, None)
             else:
                 staged.pop(CONF_DEVICE_CLASS, None)
+
+            # Person label fields (only for sensor)
+            if new_platform == "sensor":
+                mode_val = user_input.get(CONF_SENSOR_MODE, mode_now)
+                staged[CONF_SENSOR_MODE] = mode_val
+                if mode_val == SENSOR_MODE_PERSON_LABEL:
+                    person_val = str(user_input.get(CONF_PERSON_ENTITY) or person_now or "")
+                    if person_val:
+                        staged[CONF_PERSON_ENTITY] = person_val
+                    label_attr_val = str(user_input.get(CONF_LABEL_ATTR) or label_attr_now or DEFAULT_LABEL_ATTR)
+                    staged[CONF_LABEL_ATTR] = label_attr_val
 
             for k, v in staged.items():
                 if k in DATA_MUTABLE_KEYS:
@@ -210,6 +214,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(step_id="core", data_schema=schema)
 
+    # ========= Inherit attributes list (DATA) =========
     async def async_step_attrs(self, user_input=None):
         source = self._pending_data.get(CONF_SOURCE_ENTITY, self.entry.data.get(CONF_SOURCE_ENTITY))
         attrs = []
@@ -237,7 +242,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             description_placeholders={"current": ", ".join(current) or "none"},
         )
 
-    # unchanged:
+    # ========= Combine (OPTIONS) =========
     async def async_step_combine(self, user_input=None):
         o = self._opts
         d = self.entry.data or {}
@@ -268,6 +273,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 new_opts[CONF_COMBINE_ENTITY] = str(user_input.get(CONF_COMBINE_ENTITY, defaults[CONF_COMBINE_ENTITY]))
                 new_opts[CONF_COMBINE_ATTR_NAME] = str(user_input.get(CONF_COMBINE_ATTR_NAME, "combine") or "combine")
                 new_opts[CONF_HYPHENATE_STATE] = bool(user_input.get(CONF_HYPHENATE_STATE, defaults[CONF_HYPHENATE_STATE]))
+                # precision selectors return strings; store as strings; entities parse to int
                 new_opts[CONF_COMBINE_LABEL_PRECISION] = str(user_input.get(CONF_COMBINE_LABEL_PRECISION, defaults[CONF_COMBINE_LABEL_PRECISION]))
                 new_opts[CONF_COMBINE_ATTR_PRECISION] = str(user_input.get(CONF_COMBINE_ATTR_PRECISION, defaults[CONF_COMBINE_ATTR_PRECISION]))
             else:
@@ -286,6 +292,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(step_id="combine", data_schema=schema)
 
+    # ========= Extras (OPTIONS) =========
     async def async_step_extras(self, user_input=None):
         o = self._opts
 
@@ -299,14 +306,22 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             batt = user_input.get(CONF_BATTERY_ENTITY)
             pres = user_input.get(CONF_PRESENCE_HELPER)
 
-            new_opts[CONF_BATTERY_ENTITY] = str(batt) if batt else ""
-            new_opts[CONF_PRESENCE_HELPER] = str(pres) if pres else ""
+            if batt:
+                new_opts[CONF_BATTERY_ENTITY] = str(batt)
+            else:
+                new_opts.pop(CONF_BATTERY_ENTITY, None)
+
+            if pres:
+                new_opts[CONF_PRESENCE_HELPER] = str(pres)
+            else:
+                new_opts.pop(CONF_PRESENCE_HELPER, None)
 
             self._opts = new_opts
             return await self.async_step_menu()
 
         return self.async_show_form(step_id="extras", data_schema=schema)
 
+    # ========= Attribute sensors (OPTIONS) =========
     async def async_step_attr_menu(self, user_input=None):
         if user_input is not None:
             action = user_input.get("choice")
@@ -353,10 +368,12 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema({vol.Required("name"): selector({"text": {}})}),
         )
 
+    # ========= Finish =========
     async def _finish(self):
         if self._pending_data:
             clean_data = {k: self._pending_data[k] for k in self._pending_data if k in DATA_MUTABLE_KEYS}
             if clean_data:
+                # Hand off to __init__.py to atomically write data and reload the entry
                 self._opts[OPT_APPLY_DATA_UPDATE] = {"data": clean_data}
         return self.async_create_entry(title="", data=self._opts)
 

@@ -4,12 +4,22 @@
     "step": {
       "user": {
         "title": "Create Custom Entity",
-        "description": "Pick a platform, a source entity, and (optionally) a presence helper.",
+        "description": "Pick a platform, a source entity, and (optionally) a presence helper. For sensors you can choose a mode.",
         "data": {
           "platform": "Platform",
           "friendly_name": "Friendly name",
           "source_entity": "Source entity",
-          "presence_helper": "Presence helper (optional)"
+          "presence_helper": "Presence helper (optional)",
+          "sensor_mode": "Sensor mode"
+        }
+      },
+      "person_label_details": {
+        "title": "Person Label details",
+        "description": "This will create a sensor that shows a label from a Person or its tracker (e.g., address). It is a sensor, not a Person.",
+        "data": {
+          "person_entity": "Person",
+          "tracker_entity": "Device tracker (fallback / source)",
+          "label_attr": "Attribute to use (e.g., address)"
         }
       },
       "device_class": {
@@ -23,23 +33,19 @@
         "title": "Mirror attributes",
         "description": "Pick which attributes to mirror from {source}. Leave empty to mirror none.",
         "data": {
-          "inherit_attributes": "Attributes to mirror"
-        }
-      },
-      "combine_toggle": {
-        "title": "Combine another entity?",
-        "description": "You can combine another sensor either into the state label (hyphenate) or as an extra attribute.",
-        "data": {
-          "combine": "Combine another entity?"
+          "inherit_attrs": "Attributes to mirror"
         }
       },
       "combine": {
         "title": "Combine settings",
-        "description": "Choose the entity to combine. If you enable Hyphenate, its value will be appended to the label.",
+        "description": "Hyphenate appends the combined value to the label. Otherwise the value is added as an attribute with your chosen name.",
         "data": {
+          "combine": "Enable combine",
           "combine_entity": "Entity to combine",
           "combine_attr_name": "Attribute name (when not hyphenating)",
-          "hyphenate_state": "Hyphenate (append to label)"
+          "hyphenate_state": "Hyphenate (append to label)",
+          "combine_label_precision": "Label precision (for hyphenated label)",
+          "combine_attr_precision": "Attribute precision (for attribute value)"
         }
       }
     }
@@ -55,37 +61,34 @@
       },
       "core": {
         "title": "Core settings",
-        "description": "Change platform, name, source, and device class.",
+        "description": "Change platform, name, source, device class, and (for sensors) mode.",
         "data": {
           "platform": "Platform",
           "friendly_name": "Friendly name",
           "source_entity": "Source entity",
-          "device_class": "Device class"
+          "device_class": "Device class",
+          "sensor_mode": "Sensor mode",
+          "person_entity": "Person",
+          "label_attr": "Attribute to use (e.g., address)"
         }
       },
       "attrs": {
         "title": "Mirror attributes",
         "description": "Current: {current}",
         "data": {
-          "inherit_attributes": "Attributes to mirror"
+          "inherit_attrs": "Attributes to mirror"
         }
       },
       "combine": {
-        "title": "Combine settings",
+        "title": "Combine & precision",
         "description": "Hyphenate appends the combined value to the label. Otherwise the value is added as an attribute with your chosen name.",
         "data": {
           "combine": "Enable combine",
           "combine_entity": "Entity to combine",
           "combine_attr_name": "Attribute name (when not hyphenating)",
-          "hyphenate_state": "Hyphenate (append to label)"
-        }
-      },
-      "precision": {
-        "title": "Precision",
-        "description": "Label precision is used when Hyphenate is ON; Attribute precision is used when Hyphenate is OFF.",
-        "data": {
+          "hyphenate_state": "Hyphenate (append to label)",
           "combine_label_precision": "Label precision (for hyphenated label)",
-          "combine_attribute_precision": "Attribute precision (for attribute value)"
+          "combine_attr_precision": "Attribute precision (for attribute value)"
         }
       },
       "extras": {

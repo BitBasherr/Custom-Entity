@@ -135,6 +135,7 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_combine()
 
         attrs = []
+        src_id = self._data.get(CONF_SOURCE_ENTITY) or "source entity"
         st = self.hass.states.get(self._data.get(CONF_SOURCE_ENTITY))
         if st:
             attrs = list(st.attributes.keys())
@@ -146,14 +147,11 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "select": {"options": attrs, "multiple": True, "mode": "dropdown"}
                 })
             }),
+            # provide the {source} placeholder used by translations
+            description_placeholders={"source": src_id},
         )
 
     async def async_step_combine(self, user_input=None):
-        # Person Label sensors don't use combine; keep UI identical for back-compat
-        return await super().async_step_combine(user_input) if hasattr(super(), "async_step_combine") else self._legacy_combine(user_input)
-
-    # Original combine implementation copied from your file:
-    async def _legacy_combine(self, user_input=None):
         if user_input is not None:
             combine_on = bool(user_input.get(CONF_COMBINE, False))
             if combine_on:
