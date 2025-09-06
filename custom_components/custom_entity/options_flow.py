@@ -1,4 +1,4 @@
-"""Options flow: mirrors Config Flow + extras, incl. address, classification, picture."""
+"""Options flow exposing Config Flow capabilities + extras (adds optional Person pick for device_tracker picture + place classification)."""
 from __future__ import annotations
 
 from typing import Any, Dict, List
@@ -9,7 +9,6 @@ from homeassistant.core import callback
 from homeassistant.helpers.selector import selector
 
 from .const import (
-    DOMAIN,
     # platform & capability tables
     SUPPORTED_PLATFORMS,
     PLATFORMS_WITH_DEVICE_CLASS,
@@ -20,11 +19,11 @@ from .const import (
     CONF_FRIENDLY_NAME,
     CONF_DEVICE_CLASS,
     CONF_INHERIT_ATTRS,
-    # person-label + auto-address (entry.data)
+    CONF_PERSON_ENTITY,
+    # sensor person-label bits (unchanged)
     CONF_SENSOR_MODE,
     SENSOR_MODE_MIRROR,
     SENSOR_MODE_PERSON_LABEL,
-    CONF_PERSON_ENTITY,
     CONF_LABEL_ATTR,
     DEFAULT_LABEL_ATTR,
     CONF_AUTO_ADDRESS,
@@ -35,7 +34,9 @@ from .const import (
     DEFAULT_ADDRESS_MIN_MOVE_MI,
     DEFAULT_ADDRESS_MIN_INTERVAL_MIN,
     DEFAULT_GEOCODE_PROVIDER,
+    # NEW: classification toggle
     CONF_CLASSIFY_PLACE,
+    DEFAULT_CLASSIFY_PLACE,
     # options keys (entry.options)
     CONF_ATTRIBUTE_SENSORS,
     CONF_BATTERY_ENTITY,
@@ -48,6 +49,9 @@ from .const import (
     CONF_HYPHENATE_STATE,
     CONF_PRESENCE_HELPER,
     DEFAULT_COMBINE_PRECISION,
+    # combine conversion/suffix (read from both data/options)
+    CONF_COMBINE_UNIT_MODE,
+    CONF_COMBINE_SUFFIX,
     # selectors
     SELECT_ANY_ENTITY,
     SELECT_PERSON,
@@ -121,23 +125,25 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_core(self, user_input=None):
         data_now = dict(self.entry.data or {})
-        data_now.update(self._pending_data)
+        data_now.update(self._pending_data)  # show staged values
 
         platform_now = data_now.get(CONF_PLATFORM)
         name_now = data_now.get(CONF_FRIENDLY_NAME, "")
         source_now = data_now.get(CONF_SOURCE_ENTITY, "")
         device_class_now = data_now.get(CONF_DEVICE_CLASS)
 
+        # Sensor-only fields
         mode_now = data_now.get(CONF_SENSOR_MODE, SENSOR_MODE_MIRROR)
         person_now = data_now.get(CONF_PERSON_ENTITY, "")
         label_attr_now = data_now.get(CONF_LABEL_ATTR, DEFAULT_LABEL_ATTR)
 
+        # Auto-address + classification (dt OR sensor+person_label)
         auto_now = bool(data_now.get(CONF_AUTO_ADDRESS, True))
         min_move_now = float(data_now.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
         min_interval_now = int(data_now.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
         provider_now = data_now.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER)
         contact_now = data_now.get(CONF_GEOCODE_CONTACT, "")
-        classify_now = bool(data_now.get(CONF_CLASSIFY_PLACE, True))
+        classify_now = bool(data_now.get(CONF_CLASSIFY_PLACE, DEFAULT_CLASSIFY_PLACE))
 
         has_dc = platform_now in PLATFORMS_WITH_DEVICE_CLASS
 
@@ -147,7 +153,6 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             }),
             vol.Required(CONF_FRIENDLY_NAME, default=name_now): str,
             vol.Optional(CONF_SOURCE_ENTITY, default=source_now): SELECT_ANY_ENTITY,
-            vol.Optional(CONF_PERSON_ENTITY, default=person_now): SELECT_PERSON,
         }
 
         if has_dc:
@@ -160,23 +165,28 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             else:
                 fields[vol.Optional(CONF_DEVICE_CLASS, default=default_dc)] = str
 
-        # Auto-address + classification knobs for: device_tracker, or sensor in person-label mode
-        show_addr_knobs = (platform_now == "device_tracker") or (platform_now == "sensor" and mode_now == SENSOR_MODE_PERSON_LABEL)
+        # ---- Sensor-only bits (mode + person label details) ----
         if (platform_now or "") == "sensor":
             fields[vol.Optional(CONF_SENSOR_MODE, default=mode_now)] = selector({
-                "select": {"options": [{"label":"Mirror (default)","value":SENSOR_MODE_MIRROR},
-                                       {"label":"Person Label (sensor)","value":SENSOR_MODE_PERSON_LABEL}], "mode": "list"}
+                "select": {"options": [
+                    {"label": "Mirror (default)", "value": SENSOR_MODE_MIRROR},
+                    {"label": "Person Label (sensor)", "value": SENSOR_MODE_PERSON_LABEL},
+                ], "mode": "list"}
             })
-        if show_addr_knobs:
-            fields[vol.Optional(CONF_LABEL_ATTR, default=label_attr_now)] = str
+            if mode_now == SENSOR_MODE_PERSON_LABEL:
+                fields[vol.Required(CONF_PERSON_ENTITY, default=person_now)] = SELECT_PERSON
+                fields[vol.Optional(CONF_LABEL_ATTR, default=label_attr_now)] = str
+
+        # ---- Auto-address + classification (dt ALWAYS; sensor only when person_label) ----
+        if (platform_now == "device_tracker") or ((platform_now == "sensor") and (mode_now == SENSOR_MODE_PERSON_LABEL)):
             fields[vol.Optional(CONF_AUTO_ADDRESS, default=auto_now)] = bool
+            fields[vol.Optional(CONF_CLASSIFY_PLACE, default=classify_now)] = bool
             fields[vol.Optional(CONF_ADDRESS_MIN_MOVE_MI, default=min_move_now)] = SELECT_MILES_SLIDER
             fields[vol.Optional(CONF_ADDRESS_MIN_INTERVAL_MIN, default=min_interval_now)] = SELECT_MINUTES_SLIDER
             fields[vol.Optional(CONF_GEOCODE_PROVIDER, default=provider_now)] = selector({
                 "select": {"options": [{"label": "OSM Nominatim (free)", "value": "nominatim"}], "mode": "list"}
             })
             fields[vol.Optional(CONF_GEOCODE_CONTACT, default=contact_now)] = str
-            fields[vol.Optional(CONF_CLASSIFY_PLACE, default=classify_now)] = bool
 
         schema = vol.Schema(fields)
 
@@ -187,9 +197,8 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             }
             if CONF_SOURCE_ENTITY in user_input:
                 staged[CONF_SOURCE_ENTITY] = str(user_input.get(CONF_SOURCE_ENTITY) or "")
-            if CONF_PERSON_ENTITY in user_input:
-                staged[CONF_PERSON_ENTITY] = str(user_input.get(CONF_PERSON_ENTITY) or "")
 
+            # device_class handling
             if staged[CONF_PLATFORM] in PLATFORMS_WITH_DEVICE_CLASS:
                 dc_val = user_input.get(CONF_DEVICE_CLASS)
                 if dc_val in (None, ""):
@@ -201,21 +210,27 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             else:
                 staged.pop(CONF_DEVICE_CLASS, None)
 
+            # Sensor-only staging
             if staged[CONF_PLATFORM] == "sensor":
                 mode_val = user_input.get(CONF_SENSOR_MODE, mode_now)
                 staged[CONF_SENSOR_MODE] = mode_val
+                if mode_val == SENSOR_MODE_PERSON_LABEL:
+                    if user_input.get(CONF_PERSON_ENTITY) or person_now:
+                        staged[CONF_PERSON_ENTITY] = str(user_input.get(CONF_PERSON_ENTITY, person_now))
+                    if CONF_LABEL_ATTR in user_input:
+                        staged[CONF_LABEL_ATTR] = str(user_input.get(CONF_LABEL_ATTR) or DEFAULT_LABEL_ATTR)
 
-            if show_addr_knobs:
-                if user_input.get(CONF_LABEL_ATTR):
-                    staged[CONF_LABEL_ATTR] = str(user_input.get(CONF_LABEL_ATTR) or DEFAULT_LABEL_ATTR)
+            # Auto-address + classification staging
+            if (staged[CONF_PLATFORM] == "device_tracker") or ((staged[CONF_PLATFORM] == "sensor") and (staged.get(CONF_SENSOR_MODE, mode_now) == SENSOR_MODE_PERSON_LABEL)):
                 staged[CONF_AUTO_ADDRESS] = bool(user_input.get(CONF_AUTO_ADDRESS, auto_now))
+                staged[CONF_CLASSIFY_PLACE] = bool(user_input.get(CONF_CLASSIFY_PLACE, classify_now))
                 staged[CONF_ADDRESS_MIN_MOVE_MI] = float(user_input.get(CONF_ADDRESS_MIN_MOVE_MI, min_move_now))
                 staged[CONF_ADDRESS_MIN_INTERVAL_MIN] = int(user_input.get(CONF_ADDRESS_MIN_INTERVAL_MIN, min_interval_now))
-                staged[CONF_GEOCODE_PROVIDER] = str(user_input.get(CONF_GEOCODE_PROVIDER, provider_now or DEFAULT_GEOCODE_PROVIDER))
+                staged[CONF_GEOCODE_PROVIDER] = str(user_input.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER))
                 if user_input.get(CONF_GEOCODE_CONTACT) is not None:
                     staged[CONF_GEOCODE_CONTACT] = str(user_input.get(CONF_GEOCODE_CONTACT) or "")
-                staged[CONF_CLASSIFY_PLACE] = bool(user_input.get(CONF_CLASSIFY_PLACE, classify_now))
 
+            # stage only allowed keys into pending data
             for k, v in staged.items():
                 if k in DATA_MUTABLE_KEYS:
                     self._pending_data[k] = v
