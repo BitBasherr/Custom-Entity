@@ -14,19 +14,6 @@
           "sensor_mode": "Sensor mode"
         }
       },
-      "tracker_details": {
-        "title": "Tracker details",
-        "description": "Configure the address attribute and reverse geocoding for this tracker.",
-        "data": {
-          "tracker_entity": "Device tracker (source)",
-          "label_attr": "Address attribute name",
-          "auto_address": "Auto-address from GPS (reverse geocode)",
-          "address_min_move_mi": "Only update after moving (miles)",
-          "address_min_interval_min": "Minimum minutes between lookups",
-          "geocode_provider": "Reverse geocode provider",
-          "geocode_contact": "Contact info for provider (email/URL)"
-        }
-      },
       "person_label_details": {
         "title": "Person Label details",
         "description": "Creates a sensor that shows a label (e.g., address) from a Person or its tracker. This is a sensor, not a Person entity.",
@@ -38,7 +25,21 @@
           "address_min_move_mi": "Only update after moving (miles)",
           "address_min_interval_min": "Minimum minutes between lookups",
           "geocode_provider": "Reverse geocode provider",
-          "geocode_contact": "Contact info for provider (email/URL)"
+          "geocode_contact": "Contact info for provider (email/URL)",
+          "classify_place": "Add place category (gas station, park, etc.)"
+        }
+      },
+      "tracker_details": {
+        "title": "Tracker details",
+        "description": "Configure address and (optional) place category for the tracker.",
+        "data": {
+          "label_attr": "Label attribute to use",
+          "auto_address": "Auto-address from GPS (reverse geocode)",
+          "address_min_move_mi": "Only update after moving (miles)",
+          "address_min_interval_min": "Minimum minutes between lookups",
+          "geocode_provider": "Reverse geocode provider",
+          "geocode_contact": "Contact info for provider (email/URL)",
+          "classify_place": "Add place category (gas station, park, etc.)"
         }
       },
       "device_class": {
@@ -64,9 +65,7 @@
           "combine_attr_name": "Attribute name (when not hyphenating)",
           "hyphenate_state": "Hyphenate (append to label)",
           "combine_label_precision": "Label precision (for hyphenated label)",
-          "combine_attr_precision": "Attribute precision (for attribute value)",
-          "combine_unit_mode": "Unit conversion (for combined value)",
-          "combine_suffix": "Label suffix (e.g., “ min”)"
+          "combine_attr_precision": "Attribute precision (for attribute value)"
         }
       }
     }
@@ -82,7 +81,7 @@
       },
       "core": {
         "title": "Core settings",
-        "description": "Change platform, name, source, device class, and (for sensors) mode.",
+        "description": "Change platform, name, source, device class, and address/classification controls.",
         "data": {
           "platform": "Platform",
           "friendly_name": "Friendly name",
@@ -95,7 +94,8 @@
           "address_min_move_mi": "Only update after moving (miles)",
           "address_min_interval_min": "Minimum minutes between lookups",
           "geocode_provider": "Reverse geocode provider",
-          "geocode_contact": "Contact info for provider (email/URL)"
+          "geocode_contact": "Contact info for provider (email/URL)",
+          "classify_place": "Add place category (gas station, park, etc.)"
         }
       },
       "attrs": {
@@ -114,9 +114,7 @@
           "combine_attr_name": "Attribute name (when not hyphenating)",
           "hyphenate_state": "Hyphenate (append to label)",
           "combine_label_precision": "Label precision (for hyphenated label)",
-          "combine_attr_precision": "Attribute precision (for attribute value)",
-          "combine_unit_mode": "Unit conversion (for combined value)",
-          "combine_suffix": "Label suffix (e.g., “ min”)"
+          "combine_attr_precision": "Attribute precision (for attribute value)"
         }
       },
       "extras": {

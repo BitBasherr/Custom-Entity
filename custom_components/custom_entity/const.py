@@ -15,7 +15,7 @@ CONF_INHERIT_ATTRS = "inherit_attrs"
 CONF_BATTERY_ENTITY = "battery_entity"
 CONF_ATTRIBUTE_SENSORS = "attribute_sensors"  # mapping: {friendly_name: entity_id}
 
-# Combine (can be in options or data; entities read both for back-compat)
+# Combine
 CONF_COMBINE = "combine"
 CONF_COMBINE_ENTITY = "combine_entity"
 CONF_COMBINE_ATTR_NAME = "combine_attr_name"
@@ -45,24 +45,11 @@ CONF_ADDRESS_MIN_MOVE_MI = "address_min_move_mi"
 CONF_ADDRESS_MIN_INTERVAL_MIN = "address_min_interval_min"
 CONF_GEOCODE_PROVIDER = "geocode_provider"
 CONF_GEOCODE_CONTACT = "geocode_contact"  # email or URL per Nominatim policy
+CONF_CLASSIFY_PLACE = "classify_place"     # NEW: toggle adding place type attributes
 
 DEFAULT_ADDRESS_MIN_MOVE_MI = 0.1        # miles
 DEFAULT_ADDRESS_MIN_INTERVAL_MIN = 5     # minutes
 DEFAULT_GEOCODE_PROVIDER = "nominatim"
-
-# --- Combine unit override + suffix (UI + storage) ---
-CONF_COMBINE_UNIT_MODE = "combine_unit_mode"   # "auto" | "sec_to_min" | "hr_to_min" | "none"
-CONF_COMBINE_SUFFIX    = "combine_suffix"      # e.g. " min"
-
-COMBINE_UNIT_MODE_OPTIONS = [
-    {"label": "Auto (use source unit)", "value": "auto"},
-    {"label": "Seconds → Minutes",      "value": "sec_to_min"},
-    {"label": "Hours → Minutes",        "value": "hr_to_min"},
-    {"label": "No conversion",          "value": "none"},
-]
-SELECT_COMBINE_UNIT_MODE = selector({
-    "select": {"options": COMBINE_UNIT_MODE_OPTIONS, "mode": "list"}
-})
 
 # ---------------- Supported platforms ------------------------------------
 SUPPORTED_PLATFORMS = [
@@ -95,8 +82,8 @@ DEVICE_CLASSES = {
     "binary_sensor": [
         "motion", "occupancy", "opening", "smoke", "sound", "vibration", "presence",
     ],
-    "light": [],     # free-text
-    "climate": [],   # free-text
+    "light": [],
+    "climate": [],
 }
 
 # ---------------- Selectors (UI helpers) ---------------------------------
@@ -144,6 +131,5 @@ DATA_MUTABLE_KEYS = {
     CONF_ADDRESS_MIN_INTERVAL_MIN,
     CONF_GEOCODE_PROVIDER,
     CONF_GEOCODE_CONTACT,
-    # you may add combine unit/suffix here if you decide to store them in data
-    # CONF_COMBINE_UNIT_MODE, CONF_COMBINE_SUFFIX,
+    CONF_CLASSIFY_PLACE,
 }
