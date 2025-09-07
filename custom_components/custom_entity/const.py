@@ -37,7 +37,13 @@ SENSOR_MODE_PERSON_LABEL = "person_label"
 
 CONF_PERSON_ENTITY = "person_entity"
 CONF_LABEL_ATTR = "label_attr"
-DEFAULT_LABEL_ATTR = "address"   # attribute name to expose street+number
+DEFAULT_LABEL_ATTR = "address"   # default attribute name to expose street+number
+
+# ---- Back-compat shim (older builds referenced this) ----
+CONF_LABEL_MODE = "label_mode"
+LABEL_MODE_ADDRESS = "address"
+LABEL_MODE_PLACE = "place"
+DEFAULT_LABEL_MODE = LABEL_MODE_ADDRESS
 
 # ---------------- Reverse geocode (stored in entry.data) -----------------
 CONF_AUTO_ADDRESS = "auto_address"
@@ -52,59 +58,47 @@ DEFAULT_GEOCODE_PROVIDER = "nominatim"
 # ---------------- Address fields selection -------------------------------
 CONF_ADDRESS_FIELDS = "address_fields"
 
-# Canonical list of structured address/POI keys we expose (MUST stay in sync across code & UI)
+# Full list of structured address keys our geocoder can return / we surface
 ADDRESS_FIELD_KEYS = [
-    "borough",
-    "city",
-    "city_district",
-    "country",
-    "county",
-    "full_address",
-    "hamlet",
-    "municipality",
-    "neighbourhood",
-    "osm_category",
-    "osm_type_detail",
-    "place_label",
-    "place_name",
-    "place_type",
-    "postcode",
-    "quarter",
-    "smart_place_label",
-    "state",
-    "suburb",
-    "town",
-    "township",
-    "village",
+    "city", "state", "postcode", "county", "country",
+    "neighbourhood", "suburb", "city_district", "borough", "quarter",
+    "township", "municipality", "town", "village", "hamlet",
+    "place_type", "place_label", "place_name", "smart_place_label",
+    "osm_category", "osm_type_detail",
+    "full_address",  # derived from display_name
 ]
 
-# Default to ALL fields selected (user can deselect in flows)
-DEFAULT_ADDRESS_FIELDS = list(ADDRESS_FIELD_KEYS)
+# Defaults (shown when present; not sticky—entities clean old values each update)
+DEFAULT_ADDRESS_FIELDS = [
+    "city", "state", "postcode", "county", "country",
+    "neighbourhood", "township", "place_name", "smart_place_label",
+    "place_type", "place_label",
+]
 
 # Selector for address fields (nice labels)
 ADDRESS_FIELD_OPTIONS = [
-    {"label": "Borough",             "value": "borough"},
-    {"label": "City",                "value": "city"},
-    {"label": "City District",       "value": "city_district"},
-    {"label": "Country",             "value": "country"},
-    {"label": "County",              "value": "county"},
-    {"label": "Full Address",        "value": "full_address"},
-    {"label": "Hamlet",              "value": "hamlet"},
-    {"label": "Municipality",        "value": "municipality"},
-    {"label": "Neighborhood",        "value": "neighbourhood"},
-    {"label": "OSM Category",        "value": "osm_category"},
-    {"label": "OSM Type Detail",     "value": "osm_type_detail"},
-    {"label": "Place Label",         "value": "place_label"},
-    {"label": "Place Name",          "value": "place_name"},
-    {"label": "Place Type",          "value": "place_type"},
-    {"label": "Postcode",            "value": "postcode"},
-    {"label": "Quarter",             "value": "quarter"},
-    {"label": "Smart Place Label",   "value": "smart_place_label"},
-    {"label": "State",               "value": "state"},
-    {"label": "Suburb",              "value": "suburb"},
-    {"label": "Town",                "value": "town"},
-    {"label": "Township",            "value": "township"},
-    {"label": "Village",             "value": "village"},
+    {"label": "City",               "value": "city"},
+    {"label": "State",              "value": "state"},
+    {"label": "Postcode",           "value": "postcode"},
+    {"label": "County",             "value": "county"},
+    {"label": "Country",            "value": "country"},
+    {"label": "Neighborhood",       "value": "neighbourhood"},
+    {"label": "Suburb",             "value": "suburb"},
+    {"label": "City District",      "value": "city_district"},
+    {"label": "Borough",            "value": "borough"},
+    {"label": "Quarter",            "value": "quarter"},
+    {"label": "Township",           "value": "township"},
+    {"label": "Municipality",       "value": "municipality"},
+    {"label": "Town",               "value": "town"},
+    {"label": "Village",            "value": "village"},
+    {"label": "Hamlet",             "value": "hamlet"},
+    {"label": "Place Type",         "value": "place_type"},
+    {"label": "Place Label",        "value": "place_label"},
+    {"label": "Place Name (POI)",   "value": "place_name"},
+    {"label": "Smart Place Label",  "value": "smart_place_label"},
+    {"label": "OSM Category",       "value": "osm_category"},
+    {"label": "OSM Type Detail",    "value": "osm_type_detail"},
+    {"label": "Full Address",       "value": "full_address"},
 ]
 SELECT_ADDRESS_FIELDS = selector({
     "select": {"options": ADDRESS_FIELD_OPTIONS, "multiple": True, "mode": "list"}
@@ -201,7 +195,7 @@ DATA_MUTABLE_KEYS = {
     CONF_ADDRESS_MIN_INTERVAL_MIN,
     CONF_GEOCODE_PROVIDER,
     CONF_GEOCODE_CONTACT,
-    CONF_ADDRESS_FIELDS,  # user-selectable address/POI exposure
-    # you may add combine unit/suffix here if you decide to store them in data
+    CONF_ADDRESS_FIELDS,
+    # if you decide later to store these in data instead of options:
     # CONF_COMBINE_UNIT_MODE, CONF_COMBINE_SUFFIX,
 }
