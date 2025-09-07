@@ -37,7 +37,18 @@ SENSOR_MODE_PERSON_LABEL = "person_label"
 
 CONF_PERSON_ENTITY = "person_entity"
 CONF_LABEL_ATTR = "label_attr"
-DEFAULT_LABEL_ATTR = "address"   # attribute name to expose street+number (or your choice)
+DEFAULT_LABEL_ATTR = "address"   # attribute name to expose street+number
+
+# NEW: Primary label selection (controls label_attr, and Person-Label sensor state)
+CONF_LABEL_MODE = "label_mode"   # "line1" | "smart" | "place_name"
+LABEL_MODE_OPTIONS = [
+    {"label": "Line 1 (street/number)", "value": "line1"},
+    {"label": "Smart label first",      "value": "smart"},
+    {"label": "Place name first",       "value": "place_name"},
+]
+SELECT_LABEL_MODE = selector({
+    "select": {"options": LABEL_MODE_OPTIONS, "mode": "list"}
+})
 
 # ---------------- Reverse geocode (stored in entry.data) -----------------
 CONF_AUTO_ADDRESS = "auto_address"
@@ -52,25 +63,26 @@ DEFAULT_GEOCODE_PROVIDER = "nominatim"
 # ---------------- Address fields selection -------------------------------
 CONF_ADDRESS_FIELDS = "address_fields"
 
-# Full list of structured address/POI keys our geocoder can return
+# Full list of structured address keys our geocoder can return (selectable)
+# NOTE: 'line1' is injected into label_attr and is not separately selectable.
 ADDRESS_FIELD_KEYS = [
-    # canonical address bits
+    # canonical / common
     "city", "state", "postcode", "county", "country",
+    # locality granularity
     "neighbourhood", "suburb", "city_district", "borough", "quarter",
     "township", "municipality", "town", "village", "hamlet",
-    # POI / building related
-    "poi_name", "house_name", "brand", "operator",
-    # classification / labeling
-    "place_type", "place_label", "osm_category", "osm_type_detail",
+    # OSM raw meta
+    "osm_category", "osm_type_detail",
+    # our classification layer
+    "place_type", "place_label", "smart_place_label",
+    # human name (OSM 'name' or first display component)
+    "place_name",
     # convenience
-    "full_address"  # derived from display_name
+    "full_address",
 ]
 
-# Defaults (non-sticky: only shown if present in current lookup)
-DEFAULT_ADDRESS_FIELDS = [
-    "city", "state", "postcode", "county", "country",
-    "neighbourhood", "township"
-]
+# Defaults — select **all** fields by default
+DEFAULT_ADDRESS_FIELDS = list(ADDRESS_FIELD_KEYS)
 
 # Selector for address fields (nice labels)
 ADDRESS_FIELD_OPTIONS = [
@@ -89,16 +101,12 @@ ADDRESS_FIELD_OPTIONS = [
     {"label": "Town",               "value": "town"},
     {"label": "Village",            "value": "village"},
     {"label": "Hamlet",             "value": "hamlet"},
-    # POI / business extras
-    {"label": "POI / Place name",   "value": "poi_name"},
-    {"label": "House name",         "value": "house_name"},
-    {"label": "Brand",              "value": "brand"},
-    {"label": "Operator",           "value": "operator"},
-    # classification
-    {"label": "Place Type",         "value": "place_type"},
-    {"label": "Place Label",        "value": "place_label"},
     {"label": "OSM Category",       "value": "osm_category"},
     {"label": "OSM Type Detail",    "value": "osm_type_detail"},
+    {"label": "Place Type (coarse)","value": "place_type"},
+    {"label": "Place Label (coarse)","value": "place_label"},
+    {"label": "Smart Place Label",  "value": "smart_place_label"},
+    {"label": "Place Name",         "value": "place_name"},
     {"label": "Full Address",       "value": "full_address"},
 ]
 SELECT_ADDRESS_FIELDS = selector({
@@ -150,8 +158,8 @@ DEVICE_CLASSES = {
     "binary_sensor": [
         "motion", "occupancy", "opening", "smoke", "sound", "vibration", "presence",
     ],
-    "light": [],     # free-text
-    "climate": [],   # free-text
+    "light": [],
+    "climate": [],
 }
 
 # ---------------- Selectors (UI helpers) ---------------------------------
@@ -191,13 +199,11 @@ DATA_MUTABLE_KEYS = {
     CONF_SENSOR_MODE,
     CONF_PERSON_ENTITY,
     CONF_LABEL_ATTR,
+    CONF_LABEL_MODE,  # NEW
     CONF_AUTO_ADDRESS,
     CONF_ADDRESS_MIN_MOVE_MI,
     CONF_ADDRESS_MIN_INTERVAL_MIN,
     CONF_GEOCODE_PROVIDER,
     CONF_GEOCODE_CONTACT,
-    CONF_ADDRESS_FIELDS,  # allow changing which address/POI parts to expose
-    # you may add combine unit/suffix here if you decide to store them in data
-    # CONF_COMBINE_UNIT_MODE, CONF_COMBINE_SUFFIX,
+    CONF_ADDRESS_FIELDS,
 }
-PLACE_NAME_KEY = "place_name"  # sticky convenience label for automations

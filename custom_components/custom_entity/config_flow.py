@@ -1,4 +1,4 @@
-"""Config flow for Custom Entity (adds optional Person pick + tracker/sensor address field selection)."""
+"""Config flow for Custom Entity (adds optional Person pick + tracker/sensor address submenu + label mode)."""
 from __future__ import annotations
 
 import voluptuous as vol
@@ -34,6 +34,9 @@ from .const import (
     CONF_PERSON_ENTITY,
     CONF_LABEL_ATTR,
     DEFAULT_LABEL_ATTR,
+    # NEW label mode
+    CONF_LABEL_MODE,
+    SELECT_LABEL_MODE,
     # auto-address
     CONF_AUTO_ADDRESS,
     CONF_ADDRESS_MIN_MOVE_MI,
@@ -46,7 +49,6 @@ from .const import (
     # address fields
     CONF_ADDRESS_FIELDS,
     DEFAULT_ADDRESS_FIELDS,
-    SELECT_ADDRESS_FIELDS,
     # selectors
     SELECT_PERSON,
     SELECT_DEVICE_TRACKER,
@@ -81,7 +83,7 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             presence = user_input.get(CONF_PRESENCE_HELPER)
             presence = str(presence) if presence else None
             sensor_mode = user_input.get(CONF_SENSOR_MODE, SENSOR_MODE_MIRROR)
-            person = user_input.get(CONF_PERSON_ENTITY)  # optional manual person (used for tracker picture)
+            person = user_input.get(CONF_PERSON_ENTITY)
 
             data = {
                 CONF_PLATFORM: platform,
@@ -111,7 +113,6 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             self._data = data
             return await self.async_step_inherit_attrs()
 
-        # Always show optional Person picker; harmless for non-trackers.
         return self.async_show_form(
             step_id="user",
             data_schema=vol.Schema({
@@ -128,12 +129,13 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_tracker_details(self, user_input=None):
-        """Device_tracker-only: collect auto-address (reverse geocode) knobs + address fields."""
+        """Device_tracker-only: collect auto-address knobs + label mode. Address fields are in Options submenu."""
         if user_input is not None:
             tracker = user_input.get("tracker_entity") or self._data.get(CONF_SOURCE_ENTITY)
             self._data[CONF_SOURCE_ENTITY] = str(tracker) if tracker else ""
 
             self._data[CONF_LABEL_ATTR] = str(user_input.get(CONF_LABEL_ATTR) or DEFAULT_LABEL_ATTR).strip()
+            self._data[CONF_LABEL_MODE] = str(user_input.get(CONF_LABEL_MODE, "line1"))
             self._data[CONF_AUTO_ADDRESS] = bool(user_input.get(CONF_AUTO_ADDRESS, True))
             self._data[CONF_ADDRESS_MIN_MOVE_MI] = float(user_input.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
             self._data[CONF_ADDRESS_MIN_INTERVAL_MIN] = int(user_input.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
@@ -141,15 +143,13 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             contact = user_input.get(CONF_GEOCODE_CONTACT)
             if contact is not None:
                 self._data[CONF_GEOCODE_CONTACT] = str(contact)
-            # address fields selection
-            fields = user_input.get(CONF_ADDRESS_FIELDS, DEFAULT_ADDRESS_FIELDS)
-            self._data[CONF_ADDRESS_FIELDS] = list(fields) if isinstance(fields, list) else list(DEFAULT_ADDRESS_FIELDS)
-
+            self._data.setdefault(CONF_ADDRESS_FIELDS, list(DEFAULT_ADDRESS_FIELDS))
             return await self.async_step_inherit_attrs()
 
         schema = vol.Schema({
             vol.Optional("tracker_entity", default=self._data.get(CONF_SOURCE_ENTITY, "")): SELECT_DEVICE_TRACKER,
             vol.Optional(CONF_LABEL_ATTR, default=DEFAULT_LABEL_ATTR): str,
+            vol.Optional(CONF_LABEL_MODE, default="line1"): SELECT_LABEL_MODE,
             vol.Optional(CONF_AUTO_ADDRESS, default=True): bool,
             vol.Optional(CONF_ADDRESS_MIN_MOVE_MI, default=DEFAULT_ADDRESS_MIN_MOVE_MI): SELECT_MILES_SLIDER,
             vol.Optional(CONF_ADDRESS_MIN_INTERVAL_MIN, default=DEFAULT_ADDRESS_MIN_INTERVAL_MIN): SELECT_MINUTES_SLIDER,
@@ -157,16 +157,16 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "select": {"options": [{"label": "OSM Nominatim (free)", "value": "nominatim"}], "mode": "list"}
             }),
             vol.Optional(CONF_GEOCODE_CONTACT): str,
-            vol.Optional(CONF_ADDRESS_FIELDS, default=DEFAULT_ADDRESS_FIELDS): SELECT_ADDRESS_FIELDS,
         })
         return self.async_show_form(step_id="tracker_details", data_schema=schema)
 
     async def async_step_person_label_details(self, user_input=None):
-        """Sensor-only when sensor_mode=person_label."""
+        """Sensor-only when sensor_mode=person_label. Address fields live in Options submenu."""
         if user_input is not None:
             self._data[CONF_PERSON_ENTITY] = str(user_input[CONF_PERSON_ENTITY])
             self._data[CONF_SOURCE_ENTITY] = str(user_input.get(CONF_SOURCE_ENTITY) or user_input["tracker_entity"])
             self._data[CONF_LABEL_ATTR] = str(user_input.get(CONF_LABEL_ATTR) or DEFAULT_LABEL_ATTR).strip()
+            self._data[CONF_LABEL_MODE] = str(user_input.get(CONF_LABEL_MODE, "line1"))
             self._data[CONF_AUTO_ADDRESS] = bool(user_input.get(CONF_AUTO_ADDRESS, True))
             self._data[CONF_ADDRESS_MIN_MOVE_MI] = float(user_input.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
             self._data[CONF_ADDRESS_MIN_INTERVAL_MIN] = int(user_input.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
@@ -174,14 +174,14 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             contact = user_input.get(CONF_GEOCODE_CONTACT)
             if contact:
                 self._data[CONF_GEOCODE_CONTACT] = str(contact)
-            fields = user_input.get(CONF_ADDRESS_FIELDS, DEFAULT_ADDRESS_FIELDS)
-            self._data[CONF_ADDRESS_FIELDS] = list(fields) if isinstance(fields, list) else list(DEFAULT_ADDRESS_FIELDS)
+            self._data.setdefault(CONF_ADDRESS_FIELDS, list(DEFAULT_ADDRESS_FIELDS))
             return await self.async_step_inherit_attrs()
 
         schema = vol.Schema({
             vol.Required(CONF_PERSON_ENTITY): SELECT_PERSON,
             vol.Optional("tracker_entity", default=self._data.get(CONF_SOURCE_ENTITY, "")): SELECT_DEVICE_TRACKER,
             vol.Optional(CONF_LABEL_ATTR, default=DEFAULT_LABEL_ATTR): str,
+            vol.Optional(CONF_LABEL_MODE, default="line1"): SELECT_LABEL_MODE,
             vol.Optional(CONF_AUTO_ADDRESS, default=True): bool,
             vol.Optional(CONF_ADDRESS_MIN_MOVE_MI, default=DEFAULT_ADDRESS_MIN_MOVE_MI): SELECT_MILES_SLIDER,
             vol.Optional(CONF_ADDRESS_MIN_INTERVAL_MIN, default=DEFAULT_ADDRESS_MIN_INTERVAL_MIN): SELECT_MINUTES_SLIDER,
@@ -189,7 +189,6 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "select": {"options": [{"label": "OSM Nominatim (free)", "value": "nominatim"}], "mode": "list"}
             }),
             vol.Optional(CONF_GEOCODE_CONTACT): str,
-            vol.Optional(CONF_ADDRESS_FIELDS, default=DEFAULT_ADDRESS_FIELDS): SELECT_ADDRESS_FIELDS,
         })
         return self.async_show_form(step_id="person_label_details", data_schema=schema)
 

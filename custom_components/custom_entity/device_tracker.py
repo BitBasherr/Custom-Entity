@@ -1,6 +1,5 @@
 """Custom device_tracker with mirror, presence helper, optional Combine (hyphenate),
-Auto-address (structured + selectable fields), and Person picture sync (manual override + auto-detect).
-Now includes a sticky 'place_name' attribute for automation-safe use."""
+Auto-address (structured + selectable fields), label mode, and Person picture sync."""
 from __future__ import annotations
 
 import asyncio
@@ -34,6 +33,7 @@ from .const import (
     # auto-address + fields
     CONF_LABEL_ATTR,
     DEFAULT_LABEL_ATTR,
+    CONF_LABEL_MODE,
     CONF_AUTO_ADDRESS,
     CONF_ADDRESS_MIN_MOVE_MI,
     CONF_ADDRESS_MIN_INTERVAL_MIN,
@@ -101,7 +101,6 @@ def _unit_hint(state_str: str, attrs: dict) -> Optional[str]:
 
 
 def _convert_to_minutes_auto(val: float, unit_hint: Optional[str]) -> tuple[float, bool]:
-    """Convert seconds/hours to minutes if we can infer it; return (value, converted?)."""
     if unit_hint in ("s", "sec", "second", "seconds"):
         return (val / 60.0, True)
     if unit_hint in ("h", "hr", "hrs", "hour", "hours"):
@@ -114,10 +113,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
 
 class CustomTrackerEntity(TrackerEntity):
-    """Mirror a source tracker’s lat/lon/attrs, presence helper override,
-    Combine with optional hyphenation, reverse-geocoded structured address (selectable fields),
-    and Person picture sync (manual override or auto-detect)."""
-
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
         self.hass = hass
         self._entry = entry
@@ -134,13 +129,13 @@ class CustomTrackerEntity(TrackerEntity):
 
         # manual person override (may be None)
         self._person_entity: Optional[str] = d.get(CONF_PERSON_ENTITY)
-        self._resolved_person: Optional[str] = None  # auto-detected at runtime if no manual override
+        self._resolved_person: Optional[str] = None
 
         # extras
         self._battery_entity: Optional[str] = o.get(CONF_BATTERY_ENTITY)
         self._extra_map: dict[str, str] = o.get(CONF_ATTRIBUTE_SENSORS, {})
 
-        # presence helper (can force "home")
+        # presence helper
         self._presence_helper: Optional[str] = o.get(CONF_PRESENCE_HELPER) or d.get(CONF_PRESENCE_HELPER)
 
         # combine
@@ -152,18 +147,18 @@ class CustomTrackerEntity(TrackerEntity):
         self._attr_prec: int = _to_int(o.get(CONF_COMBINE_ATTR_PRECISION, d.get(CONF_COMBINE_ATTR_PRECISION, 1)), 1)
 
         # auto-address
-        self._label_attr: str = d.get(CONF_LABEL_ATTR, DEFAULT_LABEL_ATTR) or DEFAULT_LABEL_ATTR  # usually "address"
+        self._label_attr: str = d.get(CONF_LABEL_ATTR, DEFAULT_LABEL_ATTR) or DEFAULT_LABEL_ATTR
+        self._label_mode: str = d.get(CONF_LABEL_MODE, "line1")
         self._auto_addr: bool = bool(d.get(CONF_AUTO_ADDRESS, True))
         self._min_move_mi: float = float(d.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
         self._min_interval_min: int = int(d.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
         self._geocode_provider: str = d.get(CONF_GEOCODE_PROVIDER, "nominatim")
         self._geocode_contact: Optional[str] = d.get(CONF_GEOCODE_CONTACT)
 
-        # which address parts to expose if present (non-sticky)
+        # which address parts to expose if present
         self._addr_fields_list: list[str] = d.get(CONF_ADDRESS_FIELDS, DEFAULT_ADDRESS_FIELDS)
         if not isinstance(self._addr_fields_list, list):
             self._addr_fields_list = list(DEFAULT_ADDRESS_FIELDS)
-        # keep as a set for speed, but we also know the keys universe to clean staleness
         self._addr_fields_set = set([k for k in self._addr_fields_list if k in ADDRESS_FIELD_KEYS])
 
         # dynamic state
@@ -181,10 +176,6 @@ class CustomTrackerEntity(TrackerEntity):
         # picture cache
         self._attr_entity_picture: Optional[str] = None
 
-        # sticky place_name cache (automation-safe)
-        self._last_place_name: Optional[str] = None
-
-    # ---------- TrackerEntity core ----------
     @property
     def source_type(self) -> SourceType | None:
         return SourceType.GPS
@@ -202,8 +193,6 @@ class CustomTrackerEntity(TrackerEntity):
         return self._acc
 
     def _base_zone_name(self) -> Optional[str]:
-        """Compute the base location label ('home', zone name, 'not_home', or None)."""
-        # presence helper wins
         if self._presence_helper:
             ph = self.hass.states.get(self._presence_helper)
             if ph and _truthy(ph.state):
@@ -219,11 +208,6 @@ class CustomTrackerEntity(TrackerEntity):
 
     @property
     def location_name(self) -> str | None:
-        """
-        Default: return None so HA derives zone from lat/lon.
-        If hyphenate is enabled and combine is configured, build "base - value".
-        If presence helper is truthy and NOT hyphenating, force "home".
-        """
         if self._hyphenate and self._combine and self._combine_entity:
             base = self._base_zone_name() or "not_home"
             co = self.hass.states.get(self._combine_entity)
@@ -247,7 +231,6 @@ class CustomTrackerEntity(TrackerEntity):
     def extra_state_attributes(self) -> dict:
         return self._extra_attrs
 
-    # ---------- lifecycle ----------
     async def async_added_to_hass(self):
         track = async_track_state_change_event
         if self._source_entity:
@@ -261,7 +244,6 @@ class CustomTrackerEntity(TrackerEntity):
         for ent in self._extra_map.values():
             self.async_on_remove(track(self.hass, [ent], self._on_event))
 
-        # Watch manual person or auto-detected person
         target_person = self._person_entity or self._find_linked_person()
         self._resolved_person = None if self._person_entity else target_person
         if target_person:
@@ -274,9 +256,7 @@ class CustomTrackerEntity(TrackerEntity):
         self._refresh()
         self.async_write_ha_state()
 
-    # ---------- picture + person helpers ----------
     def _find_linked_person(self) -> Optional[str]:
-        """Find a person.* whose 'source' equals this entity or our source tracker."""
         try:
             persons = [st for st in self.hass.states.async_all("person")]
         except Exception:
@@ -290,10 +270,7 @@ class CustomTrackerEntity(TrackerEntity):
         return None
 
     def _update_picture(self):
-        """Prefer Person picture; fall back to source tracker picture."""
         picture = None
-
-        # Manual person overrides auto
         person_id = self._person_entity or self._resolved_person
         if person_id:
             st = self.hass.states.get(person_id)
@@ -307,50 +284,39 @@ class CustomTrackerEntity(TrackerEntity):
 
         self._attr_entity_picture = picture or None
 
-    # ---------- address attribute writer (non-sticky base + sticky place_name) ----------
+    def _choose_primary_label(self, info: Dict[str, Any]) -> Optional[str]:
+        mode = (self._label_mode or "line1").lower()
+        line1 = info.get("line1") or info.get("display_name")
+        if mode == "smart":
+            return info.get("smart_place_label") or line1
+        if mode == "place_name":
+            return info.get("place_name") or line1
+        return line1
+
     def _apply_address_to_attrs(self, info: Dict[str, Any]):
-        """Write structured address with only the selected fields; remove stale keys first."""
         if not isinstance(info, dict):
             return
 
-        # Remove any previous address-like keys we control, to avoid stickiness
-        # (plus the primary address label_attr and 'full_address').
         to_clean = set(ADDRESS_FIELD_KEYS) | {"full_address", self._label_attr}
         for k in tuple(self._extra_attrs.keys()):
             if k in to_clean:
                 self._extra_attrs.pop(k, None)
 
-        # Primary address line (street + number or first display part)
-        line1 = info.get("line1") or info.get("display_name")
-        if line1:
-            self._extra_attrs[self._label_attr] = line1
+        # Primary address label (respects label_mode)
+        chosen = self._choose_primary_label(info)
+        if chosen:
+            self._extra_attrs[self._label_attr] = chosen
 
-        # Optional selected fields (only add if present in fresh info)
+        # Optional selected fields
         for key in ADDRESS_FIELD_KEYS:
             if key in self._addr_fields_set:
                 val = info.get(key) if key != "full_address" else info.get("display_name")
                 if val is not None and val != "":
                     self._extra_attrs[key] = val
 
-        # --- sticky place_name (automation-safe) ---
-        place_name_now = (
-            info.get("poi_name")
-            or info.get("house_name")
-            or info.get("place_label")
-            or info.get("line1")
-        )
-        if place_name_now:
-            self._last_place_name = str(place_name_now)
-
-        # always expose, even if empty -> avoids KeyError in automations
-        self._extra_attrs["place_name"] = self._last_place_name or ""
-
-    # ---------- update helpers ----------
     def _refresh(self):
-        # Start fresh each update
         self._extra_attrs = {}
 
-        # If no manual person, keep auto-detecting and start listening when it changes
         if not self._person_entity:
             new_person = self._find_linked_person()
             if new_person and new_person != self._resolved_person:
@@ -359,7 +325,6 @@ class CustomTrackerEntity(TrackerEntity):
                 )
                 self._resolved_person = new_person
 
-        # mirror from source tracker
         src = self.hass.states.get(self._source_entity) if self._source_entity else None
         if src:
             try:
@@ -373,47 +338,31 @@ class CustomTrackerEntity(TrackerEntity):
             except Exception:
                 self._acc = None
 
-            # mirrored attributes (do not step on reserved keys we control)
-            reserved = {"location_zone", "eta_minutes", "eta_label", "eta_source_entity", "eta_source_name",
-                        "eta_raw", "eta_converted", "eta_unit",
-                        self._label_attr, *ADDRESS_FIELD_KEYS, "full_address", "place_name"}
+            reserved = {"location_zone", "eta_minutes", "eta_label", self._label_attr, *ADDRESS_FIELD_KEYS, "full_address"}
             for k in self._inherit_attrs:
                 if k in src.attributes and k not in reserved:
                     self._extra_attrs[k] = src.attributes[k]
 
-        # battery passthrough
         if self._battery_entity:
             batt = self.hass.states.get(self._battery_entity)
             if batt:
                 self._extra_attrs["battery_level"] = batt.state
 
-        # user-defined extra sensors
         for friendly, ent_id in self._extra_map.items():
             st = self.hass.states.get(ent_id)
             if st is not None:
                 self._extra_attrs[friendly] = st.state
 
-        # --- UI helper: always expose the base zone name ---
         base_zone = self._base_zone_name() or "not_home"
-        self._extra_attrs["location_zone"] = base_zone  # renders as “Location zone”
+        self._extra_attrs["location_zone"] = base_zone
 
-        # --- Combine value (attribute when NOT hyphenating); provide ETA helpers & provenance ---
         combined_val_text = None
-        eta_converted = None
-        eta_unit = None
         if self._combine and self._combine_entity:
             co = self.hass.states.get(self._combine_entity)
             if co:
-                self._extra_attrs["eta_source_entity"] = co.entity_id
-                self._extra_attrs["eta_source_name"] = co.name or co.entity_id
-                self._extra_attrs["eta_raw"] = co.state
-
                 num = _float_from_state(co.state)
-                unit_hint = _unit_hint(co.state, co.attributes or {})
                 if num is not None:
-                    minutes, converted = _convert_to_minutes_auto(num, unit_hint)
-                    eta_converted = converted
-                    eta_unit = "min" if converted else (unit_hint or "")
+                    minutes, converted = _convert_to_minutes_auto(num, _unit_hint(co.state, co.attributes or {}))
                     use_prec = self._attr_prec if not self._hyphenate else self._label_prec
                     val_txt = _fmt_number(minutes if converted else num, use_prec)
                     if not self._hyphenate:
@@ -427,24 +376,18 @@ class CustomTrackerEntity(TrackerEntity):
         if combined_val_text is not None:
             self._extra_attrs["eta_minutes"] = combined_val_text
             self._extra_attrs["eta_label"] = f"{combined_val_text} min"
-            if eta_converted is not None:
-                self._extra_attrs["eta_converted"] = bool(eta_converted)
-            if eta_unit is not None:
-                self._extra_attrs["eta_unit"] = eta_unit
+            # also show provenance (entity_id and raw state)
+            co = self.hass.states.get(self._combine_entity) if self._combine_entity else None
+            if co is not None:
+                self._extra_attrs["eta_source_entity"] = self._combine_entity
+                self._extra_attrs["eta_source_state"] = str(co.state)
 
-        # auto-address (write structured attributes)
         if self._auto_addr and self._lat is not None and self._lon is not None:
             asyncio.create_task(self._maybe_reverse_geocode(self._lat, self._lon))
 
-        # persist last known structured address (non-sticky — but show if we have fresh cache)
         if self._address_cache:
             self._apply_address_to_attrs(self._address_cache)
 
-        # ensure sticky place_name is always present even if no fresh geocode
-        if "place_name" not in self._extra_attrs:
-            self._extra_attrs["place_name"] = self._last_place_name or ""
-
-        # update picture from person/source
         self._update_picture()
 
     async def _maybe_reverse_geocode(self, lat: float, lon: float):

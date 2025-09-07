@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -35,10 +35,6 @@ def _pick_neighbourhood(addr: Dict[str, Any]) -> Optional[str]:
 
 
 def _make_line1(addr: Dict[str, Any], display_name: str) -> str:
-    """
-    Prefer house number + road. If missing, fall back to best available
-    road-like field, otherwise the first part of display_name.
-    """
     house = addr.get("house_number")
     road = _pick_road(addr)
     if house and road:
@@ -48,7 +44,24 @@ def _make_line1(addr: Dict[str, Any], display_name: str) -> str:
     return (display_name or "").split(",")[0].strip()
 
 
-def _classify_place(addr: Dict[str, Any], display_line1: str) -> tuple[str, str]:
+def _extract_place_name(data: Dict[str, Any], addr: Dict[str, Any], display_name: str) -> Optional[str]:
+    # Prefer explicit OSM "name" if available; else first display part; else None
+    name = data.get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    first = (display_name or "").split(",")[0].strip()
+    if first:
+        # If first part is identical to computed line1 (like a road), keep it too
+        return first
+    return None
+
+
+def _classify_place(addr: Dict[str, Any], display_line1: str, data: Dict[str, Any]) -> Tuple[str, str]:
+    """
+    Return (place_type, place_label).
+    place_type is coarse: address | neighbourhood | township | locality | country | place
+    place_label is a human label for that bucket.
+    """
     # Looks like a street address:
     if addr.get("house_number") or _pick_road(addr):
         return "address", display_line1
@@ -78,6 +91,58 @@ def _classify_place(addr: Dict[str, Any], display_line1: str) -> tuple[str, str]
     return "place", display_line1 or "place"
 
 
+def _smart_label(category: Optional[str], type_detail: Optional[str], place_name: Optional[str], line1: str) -> Optional[str]:
+    """
+    Build a friendlier label when we can (parking lots, fuel, supermarkets, etc.)
+    Examples:
+      amenity=parking             -> "Parking Lot at {place_name or line1}"
+      amenity=fuel                -> "Gas Station at {place_name or line1}"
+      shop=supermarket (category='shop', type='supermarket') -> "Supermarket at …"
+    """
+    cat = (category or "").strip().lower()
+    typ = (type_detail or "").strip().lower()
+    at = place_name or line1
+
+    if not cat and not typ:
+        return None
+
+    # Amenity-based
+    if cat == "amenity":
+        if typ in {"parking", "parking_space", "motorcycle_parking"}:
+            return f"Parking Lot at {at}"
+        if typ in {"fuel"}:
+            return f"Gas Station at {at}"
+        if typ in {"bank"}:
+            return f"Bank at {at}"
+        if typ in {"school", "college", "university"}:
+            return f"School at {at}"
+        if typ in {"hospital", "clinic", "doctors", "dentist"}:
+            return f"Medical Facility at {at}"
+        if typ in {"fast_food", "restaurant", "cafe"}:
+            return f"Restaurant at {at}"
+
+    # Shop-based
+    if cat == "shop":
+        if typ in {"supermarket", "convenience"}:
+            return f"Supermarket at {at}"
+        if typ in {"mall"}:
+            return f"Mall at {at}"
+        if typ in {"department_store"}:
+            return f"Department Store at {at}"
+        return f"Shop at {at}"
+
+    # Leisure/tourism quick wins
+    if cat in {"leisure", "tourism"}:
+        return f"{typ.capitalize() if typ else cat.capitalize()} at {at}"
+
+    # Generic fallback
+    if typ:
+        return f"{typ.replace('_',' ').title()} at {at}"
+    if cat:
+        return f"{cat.replace('_',' ').title()} at {at}"
+    return None
+
+
 async def async_reverse_geocode(
     hass,
     lat: float,
@@ -86,27 +151,13 @@ async def async_reverse_geocode(
     lang: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Nominatim reverse geocode with structured output + classification.
-    Requests namedetails and extratags so we can surface POI/business data.
-
-    Returns a dict with (subset shown):
-      line1, city, state, postcode, county, country,
-      township, neighbourhood, suburb, city_district, borough, quarter,
-      town, village, hamlet, municipality,
-      poi_name, house_name, brand, operator,
-      osm_category, osm_type_detail, place_type, place_label, display_name
-    or None on failure.
+    Nominatim reverse geocode with structured output + classification + smart label.
+    Returns a dict with many keys (only non-empty ones are returned).
     """
     if lat is None or lon is None:
         return None
 
-    params = {
-        "format": "jsonv2",
-        "lat": f"{lat}",
-        "lon": f"{lon}",
-        "namedetails": 1,   # expose 'namedetails' block
-        "extratags": 1,     # expose 'extratags' (brand/operator/etc.)
-    }
+    params = {"format": "jsonv2", "lat": f"{lat}", "lon": f"{lon}"}
     headers = {
         "Accept": "application/json",
         "User-Agent": f"HA-CustomEntity/1.0 ({contact})" if contact else "HA-CustomEntity/1.0",
@@ -123,24 +174,17 @@ async def async_reverse_geocode(
     except Exception:
         return None
 
-    display = data.get("display_name", "") or ""
+    display = data.get("display_name", "")
     addr = data.get("address") or {}
     if not isinstance(addr, dict):
         addr = {}
 
-    namedetails = data.get("namedetails") or {}
-    if not isinstance(namedetails, dict):
-        namedetails = {}
-
-    extratags = data.get("extratags") or {}
-    if not isinstance(extratags, dict):
-        extratags = {}
-
     line1 = _make_line1(addr, display)
-    place_type, place_label = _classify_place(addr, line1)
-
-    # Primary POI / place name
-    poi_name = data.get("name") or namedetails.get("name") or None
+    place_type, place_label = _classify_place(addr, line1, data)
+    place_name = _extract_place_name(data, addr, display)  # sticky-ish human name
+    cat = data.get("category")
+    typ = data.get("type")
+    smart = _smart_label(cat, typ, place_name, line1)
 
     result: Dict[str, Any] = {
         "line1": line1,
@@ -159,21 +203,16 @@ async def async_reverse_geocode(
         "village": addr.get("village"),
         "hamlet": addr.get("hamlet"),
         "municipality": addr.get("municipality"),
-        # POI / building extras
-        "poi_name": poi_name,
-        "house_name": addr.get("house_name"),
-        "brand": extratags.get("brand"),
-        "operator": extratags.get("operator"),
-        # Classification
-        "osm_category": data.get("category"),
-        "osm_type_detail": data.get("type"),
+        "osm_category": cat,
+        "osm_type_detail": typ,
         "place_type": place_type,
         "place_label": place_label,
-        # convenience
+        "smart_place_label": smart,
+        "place_name": place_name,
         "display_name": display,
     }
     # Strip empties
-    return {k: v for k, v in result.items() if v or v == 0}
+    return {k: v for k, v in result.items() if v is not None and v != ""}
 
 
 def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

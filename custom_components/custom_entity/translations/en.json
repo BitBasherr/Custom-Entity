@@ -16,31 +16,31 @@
       },
       "tracker_details": {
         "title": "Tracker details",
-        "description": "Configure the address attribute and reverse geocoding for this tracker.",
+        "description": "Configure reverse geocoding and label behavior. Address fields are picked in the Address fields submenu.",
         "data": {
           "tracker_entity": "Device tracker (source)",
           "label_attr": "Address attribute name",
+          "label_mode": "Primary label mode",
           "auto_address": "Auto-address from GPS (reverse geocode)",
           "address_min_move_mi": "Only update after moving (miles)",
           "address_min_interval_min": "Minimum minutes between lookups",
           "geocode_provider": "Reverse geocode provider",
-          "geocode_contact": "Contact info for provider (email/URL)",
-          "address_fields": "Address fields to expose (if present)"
+          "geocode_contact": "Contact info for provider (email/URL)"
         }
       },
       "person_label_details": {
         "title": "Person Label details",
-        "description": "Creates a sensor that shows a label (e.g., address) from a Person or its tracker. This is a sensor, not a Person entity.",
+        "description": "Creates a sensor that shows a label (e.g., address) from a Person or its tracker. Address fields are picked in the Address fields submenu.",
         "data": {
           "person_entity": "Person",
           "tracker_entity": "Device tracker (fallback / source)",
           "label_attr": "Label attribute to use",
+          "label_mode": "Primary label mode",
           "auto_address": "Auto-address from GPS (reverse geocode)",
           "address_min_move_mi": "Only update after moving (miles)",
           "address_min_interval_min": "Minimum minutes between lookups",
           "geocode_provider": "Reverse geocode provider",
-          "geocode_contact": "Contact info for provider (email/URL)",
-          "address_fields": "Address fields to expose (if present)"
+          "geocode_contact": "Contact info for provider (email/URL)"
         }
       },
       "device_class": {
@@ -66,9 +66,7 @@
           "combine_attr_name": "Attribute name (when not hyphenating)",
           "hyphenate_state": "Hyphenate (append to label)",
           "combine_label_precision": "Label precision (for hyphenated label)",
-          "combine_attr_precision": "Attribute precision (for attribute value)",
-          "combine_unit_mode": "Unit conversion (for combined value)",
-          "combine_suffix": "Label suffix (e.g., “ min”)"
+          "combine_attr_precision": "Attribute precision (for attribute value)"
         }
       }
     }
@@ -84,7 +82,7 @@
       },
       "core": {
         "title": "Core settings",
-        "description": "Change platform, name, source, device class, and (for sensors) mode. Configure reverse geocoding and which address fields to expose.",
+        "description": "Change platform, name, source, device class, and (for sensors) mode. Configure reverse geocoding and label behavior here; pick which address fields to expose in the Address fields submenu.",
         "data": {
           "platform": "Platform",
           "friendly_name": "Friendly name",
@@ -93,12 +91,12 @@
           "sensor_mode": "Sensor mode",
           "person_entity": "Person",
           "label_attr": "Label attribute to use",
+          "label_mode": "Primary label mode",
           "auto_address": "Auto-address from GPS",
           "address_min_move_mi": "Only update after moving (miles)",
           "address_min_interval_min": "Minimum minutes between lookups",
           "geocode_provider": "Reverse geocode provider",
-          "geocode_contact": "Contact info for provider (email/URL)",
-          "address_fields": "Address fields to expose (if present)"
+          "geocode_contact": "Contact info for provider (email/URL)"
         }
       },
       "attrs": {
@@ -106,6 +104,13 @@
         "description": "Current: {current}",
         "data": {
           "inherit_attrs": "Attributes to mirror"
+        }
+      },
+      "addr_fields": {
+        "title": "Address fields",
+        "description": "Select which address fields to expose when available. Defaults to all.",
+        "data": {
+          "address_fields": "Address fields to expose (if present)"
         }
       },
       "combine": {
@@ -117,9 +122,7 @@
           "combine_attr_name": "Attribute name (when not hyphenating)",
           "hyphenate_state": "Hyphenate (append to label)",
           "combine_label_precision": "Label precision (for hyphenated label)",
-          "combine_attr_precision": "Attribute precision (for attribute value)",
-          "combine_unit_mode": "Unit conversion (for combined value)",
-          "combine_suffix": "Label suffix (e.g., “ min”)"
+          "combine_attr_precision": "Attribute precision (for attribute value)"
         }
       },
       "extras": {
