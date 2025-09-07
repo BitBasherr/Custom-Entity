@@ -16,16 +16,16 @@
       },
       "tracker_details": {
         "title": "Tracker details",
-        "description": "Configure the address attribute, reverse geocoding and (optional) place classification.",
+        "description": "Configure the address attribute and reverse geocoding for this tracker.",
         "data": {
           "tracker_entity": "Device tracker (source)",
           "label_attr": "Address attribute name",
           "auto_address": "Auto-address from GPS (reverse geocode)",
-          "classify_place": "Classify place type (restaurant, gas, etc.)",
           "address_min_move_mi": "Only update after moving (miles)",
           "address_min_interval_min": "Minimum minutes between lookups",
           "geocode_provider": "Reverse geocode provider",
-          "geocode_contact": "Contact info for provider (email/URL)"
+          "geocode_contact": "Contact info for provider (email/URL)",
+          "address_fields": "Address fields to expose (if present)"
         }
       },
       "person_label_details": {
@@ -36,11 +36,11 @@
           "tracker_entity": "Device tracker (fallback / source)",
           "label_attr": "Label attribute to use",
           "auto_address": "Auto-address from GPS (reverse geocode)",
-          "classify_place": "Classify place type (restaurant, gas, etc.)",
           "address_min_move_mi": "Only update after moving (miles)",
           "address_min_interval_min": "Minimum minutes between lookups",
           "geocode_provider": "Reverse geocode provider",
-          "geocode_contact": "Contact info for provider (email/URL)"
+          "geocode_contact": "Contact info for provider (email/URL)",
+          "address_fields": "Address fields to expose (if present)"
         }
       },
       "device_class": {
@@ -77,14 +77,14 @@
     "step": {
       "menu": {
         "title": "Custom Entity — Options",
-        "description": "Edit any setting, then choose **Save & apply**.",
+        "description": "Edit any setting, then choose Save & apply.",
         "data": {
           "choice": "Choose an action"
         }
       },
       "core": {
         "title": "Core settings",
-        "description": "Change platform, name, source, device class, and (for sensors) mode. For trackers (or Person Label sensors) you can tune reverse geocoding and place classification.",
+        "description": "Change platform, name, source, device class, and (for sensors) mode. Configure reverse geocoding and which address fields to expose.",
         "data": {
           "platform": "Platform",
           "friendly_name": "Friendly name",
@@ -94,11 +94,11 @@
           "person_entity": "Person",
           "label_attr": "Label attribute to use",
           "auto_address": "Auto-address from GPS",
-          "classify_place": "Classify place type (restaurant, gas, etc.)",
           "address_min_move_mi": "Only update after moving (miles)",
           "address_min_interval_min": "Minimum minutes between lookups",
           "geocode_provider": "Reverse geocode provider",
-          "geocode_contact": "Contact info for provider (email/URL)"
+          "geocode_contact": "Contact info for provider (email/URL)",
+          "address_fields": "Address fields to expose (if present)"
         }
       },
       "attrs": {

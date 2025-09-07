@@ -37,24 +37,64 @@ SENSOR_MODE_PERSON_LABEL = "person_label"
 
 CONF_PERSON_ENTITY = "person_entity"
 CONF_LABEL_ATTR = "label_attr"
-DEFAULT_LABEL_ATTR = "address"   # default attribute name to expose as label
+DEFAULT_LABEL_ATTR = "address"   # attribute name to expose street+number
 
-# Auto-address (reverse-geocode) config (stored in entry.data)
+# ---------------- Reverse geocode (stored in entry.data) -----------------
 CONF_AUTO_ADDRESS = "auto_address"
 CONF_ADDRESS_MIN_MOVE_MI = "address_min_move_mi"
 CONF_ADDRESS_MIN_INTERVAL_MIN = "address_min_interval_min"
 CONF_GEOCODE_PROVIDER = "geocode_provider"
 CONF_GEOCODE_CONTACT = "geocode_contact"  # email or URL per Nominatim policy
-
 DEFAULT_ADDRESS_MIN_MOVE_MI = 0.1        # miles
 DEFAULT_ADDRESS_MIN_INTERVAL_MIN = 5     # minutes
 DEFAULT_GEOCODE_PROVIDER = "nominatim"
 
-# --- (NEW) Place classification toggle (Nominatim category/type mapping) ---
-CONF_CLASSIFY_PLACE = "classify_place"   # bool, stored in entry.data; sensor & tracker read it
-DEFAULT_CLASSIFY_PLACE = False
+# ---------------- Address fields selection -------------------------------
+CONF_ADDRESS_FIELDS = "address_fields"
 
-# --- Combine unit override + suffix (UI + storage) ---
+# Full list of structured address keys our geocoder can return
+ADDRESS_FIELD_KEYS = [
+    "city", "state", "postcode", "county", "country",
+    "neighbourhood", "suburb", "city_district", "borough", "quarter",
+    "township", "municipality", "town", "village", "hamlet",
+    "place_type", "place_label", "osm_category", "osm_type_detail",
+    "full_address"  # derived from display_name
+]
+
+# Defaults (non-sticky: only shown if present in current lookup)
+DEFAULT_ADDRESS_FIELDS = [
+    "city", "state", "postcode", "county", "country",
+    "neighbourhood", "township"
+]
+
+# Selector for address fields (nice labels)
+ADDRESS_FIELD_OPTIONS = [
+    {"label": "City",               "value": "city"},
+    {"label": "State",              "value": "state"},
+    {"label": "Postcode",           "value": "postcode"},
+    {"label": "County",             "value": "county"},
+    {"label": "Country",            "value": "country"},
+    {"label": "Neighborhood",       "value": "neighbourhood"},
+    {"label": "Suburb",             "value": "suburb"},
+    {"label": "City District",      "value": "city_district"},
+    {"label": "Borough",            "value": "borough"},
+    {"label": "Quarter",            "value": "quarter"},
+    {"label": "Township",           "value": "township"},
+    {"label": "Municipality",       "value": "municipality"},
+    {"label": "Town",               "value": "town"},
+    {"label": "Village",            "value": "village"},
+    {"label": "Hamlet",             "value": "hamlet"},
+    {"label": "Place Type",         "value": "place_type"},
+    {"label": "Place Label",        "value": "place_label"},
+    {"label": "OSM Category",       "value": "osm_category"},
+    {"label": "OSM Type Detail",    "value": "osm_type_detail"},
+    {"label": "Full Address",       "value": "full_address"},
+]
+SELECT_ADDRESS_FIELDS = selector({
+    "select": {"options": ADDRESS_FIELD_OPTIONS, "multiple": True, "mode": "list"}
+})
+
+# --- Combine unit override + suffix (UI + storage; used by sensor) -------
 CONF_COMBINE_UNIT_MODE = "combine_unit_mode"   # "auto" | "sec_to_min" | "hr_to_min" | "none"
 CONF_COMBINE_SUFFIX    = "combine_suffix"      # e.g. " min"
 
@@ -117,10 +157,7 @@ PRECISION_OPTIONS = [
     {"label": "3  (e.g., 12.345)","value": "3"},
 ]
 SELECT_PRECISION = selector({
-    "select": {
-        "options": PRECISION_OPTIONS,
-        "mode": "list"
-    }
+    "select": {"options": PRECISION_OPTIONS, "mode": "list"}
 })
 
 # Sliders for distance/interval
@@ -148,8 +185,7 @@ DATA_MUTABLE_KEYS = {
     CONF_ADDRESS_MIN_INTERVAL_MIN,
     CONF_GEOCODE_PROVIDER,
     CONF_GEOCODE_CONTACT,
-    # NEW: allow toggling classification via options->data bridge as well
-    CONF_CLASSIFY_PLACE,
-    # (if you ever want unit/suffix moved to data, add here)
+    CONF_ADDRESS_FIELDS,  # NEW: allow changing which address parts to expose
+    # you may add combine unit/suffix here if you decide to store them in data
     # CONF_COMBINE_UNIT_MODE, CONF_COMBINE_SUFFIX,
 }

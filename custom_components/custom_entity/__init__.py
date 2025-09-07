@@ -1,7 +1,7 @@
 """Init for Custom Entity integration (with entry migration and Options→Data bridge)."""
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Optional
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -12,7 +12,7 @@ from .const import (
     DOMAIN,
     SUPPORTED_PLATFORMS,
     CONF_PLATFORM,
-    # migrate keys
+    # migrate keys (existing)
     CONF_BATTERY_ENTITY,
     CONF_ATTRIBUTE_SENSORS,
     CONF_COMBINE,
@@ -22,11 +22,15 @@ from .const import (
     CONF_PRESENCE_HELPER,
     CONF_COMBINE_PRECISION,
     CONF_COMBINE_LABEL_PRECISION,
+    # new bits (non-breaking defaults)
+    CONF_ADDRESS_FIELDS,
+    DEFAULT_ADDRESS_FIELDS,
+    # options→data bridge
     OPT_APPLY_DATA_UPDATE,
     DATA_MUTABLE_KEYS,
 )
 
-CONFIG_ENTRY_VERSION = 2  # bump when we migrate formats
+CONFIG_ENTRY_VERSION = 3  # bump when we migrate formats
 
 # Map string platform names to HA Platform enums (forward/unload expects enums)
 _PLATFORM_ENUM: Dict[str, Platform] = {
@@ -64,24 +68,31 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         data = dict(entry.data or {})
         options = dict(entry.options or {})
 
-        # Move combine-related toggles from data -> options if they were stored there previously
-        for k in (
-            CONF_BATTERY_ENTITY,
-            CONF_ATTRIBUTE_SENSORS,
-            CONF_COMBINE,
-            CONF_COMBINE_ENTITY,
-            CONF_COMBINE_ATTR_NAME,
-            CONF_HYPHENATE_STATE,
-            CONF_PRESENCE_HELPER,
-        ):
-            if k in data and k not in options:
-                options[k] = data.pop(k)
+        # ---- v1 -> v2 (your previous migration): move combine & extras into options
+        if version < 2:
+            for k in (
+                CONF_BATTERY_ENTITY,
+                CONF_ATTRIBUTE_SENSORS,
+                CONF_COMBINE,
+                CONF_COMBINE_ENTITY,
+                CONF_COMBINE_ATTR_NAME,
+                CONF_HYPHENATE_STATE,
+                CONF_PRESENCE_HELPER,
+            ):
+                if k in data and k not in options:
+                    options[k] = data.pop(k)
 
-        # Migrate legacy single precision to new label precision if not already present
-        if CONF_COMBINE_PRECISION in data and CONF_COMBINE_LABEL_PRECISION not in options:
-            options[CONF_COMBINE_LABEL_PRECISION] = data.pop(CONF_COMBINE_PRECISION)
-        if CONF_COMBINE_PRECISION in options and CONF_COMBINE_LABEL_PRECISION not in options:
-            options[CONF_COMBINE_LABEL_PRECISION] = options.pop(CONF_COMBINE_PRECISION)
+            # migrate legacy single precision to "combine_label_precision" if needed
+            if CONF_COMBINE_PRECISION in data and CONF_COMBINE_LABEL_PRECISION not in options:
+                options[CONF_COMBINE_LABEL_PRECISION] = data.pop(CONF_COMBINE_PRECISION)
+            if CONF_COMBINE_PRECISION in options and CONF_COMBINE_LABEL_PRECISION not in options:
+                options[CONF_COMBINE_LABEL_PRECISION] = options.pop(CONF_COMBINE_PRECISION)
+
+        # ---- v2 -> v3: add default address fields if missing (no behavior change otherwise)
+        if version < 3:
+            # We only set a default if the key is absent to avoid clobbering user choices.
+            if CONF_ADDRESS_FIELDS not in data:
+                data[CONF_ADDRESS_FIELDS] = list(DEFAULT_ADDRESS_FIELDS)
 
         entry.version = CONFIG_ENTRY_VERSION
         hass.config_entries.async_update_entry(entry, data=data, options=options)
@@ -106,15 +117,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
           • Clean marker keys
           • Reload the entry to apply platform/source/etc. changes
         """
-        # 1) Apply pending data changes requested by options flow
         opts = dict(entry.options or {})
-        pending: Dict[str, Any] | None = opts.get(OPT_APPLY_DATA_UPDATE)
-        if isinstance(pending, dict) and "data" in pending and isinstance(pending["data"], dict):
+        pending = opts.get(OPT_APPLY_DATA_UPDATE)
+
+        # 1) Apply pending data changes requested by options flow
+        if isinstance(pending, dict) and isinstance(pending.get("data"), dict):
             new_data = dict(entry.data or {})
             for k, v in pending["data"].items():
                 if k in DATA_MUTABLE_KEYS:
                     new_data[k] = v
-            # Clean the marker before saving
+
+            # Clean the marker before saving to avoid loops
             opts.pop(OPT_APPLY_DATA_UPDATE, None)
             hass.config_entries.async_update_entry(entry, data=new_data, options=opts)
 

@@ -1,5 +1,5 @@
 """Custom device_tracker with mirror, presence helper, optional Combine (hyphenate),
-Auto-address (structured), optional Place classification, and Person picture sync (manual override + auto-detect)."""
+Auto-address (structured + selectable fields), and Person picture sync (manual override + auto-detect)."""
 from __future__ import annotations
 
 import asyncio
@@ -30,7 +30,7 @@ from .const import (
     CONF_HYPHENATE_STATE,
     CONF_COMBINE_ATTR_PRECISION,
     CONF_COMBINE_LABEL_PRECISION,
-    # auto-address
+    # auto-address + fields
     CONF_LABEL_ATTR,
     DEFAULT_LABEL_ATTR,
     CONF_AUTO_ADDRESS,
@@ -40,10 +40,11 @@ from .const import (
     CONF_GEOCODE_CONTACT,
     DEFAULT_ADDRESS_MIN_MOVE_MI,
     DEFAULT_ADDRESS_MIN_INTERVAL_MIN,
+    CONF_ADDRESS_FIELDS,
+    DEFAULT_ADDRESS_FIELDS,
+    ADDRESS_FIELD_KEYS,
     # person link (manual override)
     CONF_PERSON_ENTITY,
-    # NEW: classification toggle
-    CONF_CLASSIFY_PLACE,
 )
 
 from .geocode import async_reverse_geocode, haversine_miles
@@ -85,7 +86,7 @@ def _float_from_state(s) -> Optional[float]:
 
 
 def _unit_hint(state_str: str, attrs: dict) -> Optional[str]:
-    u = attrs.get("unit_of_measurement") or attrs.get("unit")
+    u = (attrs or {}).get("unit_of_measurement") or (attrs or {}).get("unit")
     if isinstance(u, str) and u:
         return u.lower()
     s = str(state_str).lower()
@@ -113,7 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
 class CustomTrackerEntity(TrackerEntity):
     """Mirror a source tracker’s lat/lon/attrs, presence helper override,
-    Combine with optional hyphenation, reverse-geocoded structured address (+ optional place classification),
+    Combine with optional hyphenation, reverse-geocoded structured address (selectable fields),
     and Person picture sync (manual override or auto-detect)."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
@@ -156,8 +157,13 @@ class CustomTrackerEntity(TrackerEntity):
         self._min_interval_min: int = int(d.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
         self._geocode_provider: str = d.get(CONF_GEOCODE_PROVIDER, "nominatim")
         self._geocode_contact: Optional[str] = d.get(CONF_GEOCODE_CONTACT)
-        # NEW: place classification
-        self._classify: bool = bool(d.get(CONF_CLASSIFY_PLACE, False))
+
+        # which address parts to expose if present (non-sticky)
+        self._addr_fields_list: list[str] = d.get(CONF_ADDRESS_FIELDS, DEFAULT_ADDRESS_FIELDS)
+        if not isinstance(self._addr_fields_list, list):
+            self._addr_fields_list = list(DEFAULT_ADDRESS_FIELDS)
+        # keep as a set for speed, but we also know the keys universe to clean staleness
+        self._addr_fields_set = set([k for k in self._addr_fields_list if k in ADDRESS_FIELD_KEYS])
 
         # dynamic state
         self._lat: Optional[float] = None
@@ -297,34 +303,35 @@ class CustomTrackerEntity(TrackerEntity):
 
         self._attr_entity_picture = picture or None
 
+    # ---------- address attribute writer (non-sticky) ----------
     def _apply_address_to_attrs(self, info: Dict[str, Any]):
-        """Write structured address (and optional place classification) into attributes."""
-        if not info:
+        """Write structured address with only the selected fields; remove stale keys first."""
+        if not isinstance(info, dict):
             return
+
+        # Remove any previous address-like keys we control, to avoid stickiness
+        # (plus the primary address label_attr and 'full_address').
+        to_clean = set(ADDRESS_FIELD_KEYS) | {"full_address", self._label_attr}
+        for k in tuple(self._extra_attrs.keys()):
+            if k in to_clean:
+                self._extra_attrs.pop(k, None)
+
+        # Primary address line (street + number or first display part)
         line1 = info.get("line1") or info.get("display_name")
         if line1:
             self._extra_attrs[self._label_attr] = line1
-        for key in ("city", "state", "township", "postcode", "county", "country", "neighbourhood"):
-            val = info.get(key)
-            if val:
-                self._extra_attrs[key] = val
-        if info.get("display_name"):
-            self._extra_attrs["full_address"] = info["display_name"]
 
-        # Optional classification fields (if enabled and present)
-        if self._classify:
-            for k in ("poi_name", "place_class", "place_type", "place_label"):
-                v = info.get(k)
-                if v:
-                    self._extra_attrs[k] = v
-            if "place_label" in info:
-                self._extra_attrs["type"] = info["place_label"]  # convenience alias for automations
+        # Optional selected fields (only add if present in fresh info)
+        for key in ADDRESS_FIELD_KEYS:
+            if key in self._addr_fields_set:
+                val = info.get(key) if key != "full_address" else info.get("display_name")
+                if val is not None and val != "":
+                    self._extra_attrs[key] = val
 
     # ---------- update helpers ----------
     def _refresh(self):
-        # fresh attributes every update
+        # Start fresh each update
         self._extra_attrs = {}
-        RESERVED = {"location_zone", "eta_minutes", "eta_label"}
 
         # If no manual person, keep auto-detecting and start listening when it changes
         if not self._person_entity:
@@ -349,9 +356,10 @@ class CustomTrackerEntity(TrackerEntity):
             except Exception:
                 self._acc = None
 
-            # mirror only non-reserved attributes
+            # mirrored attributes (do not step on reserved keys we control)
+            reserved = {"location_zone", "eta_minutes", "eta_label", self._label_attr, *ADDRESS_FIELD_KEYS, "full_address"}
             for k in self._inherit_attrs:
-                if k in src.attributes and k not in RESERVED:
+                if k in src.attributes and k not in reserved:
                     self._extra_attrs[k] = src.attributes[k]
 
         # battery passthrough
@@ -396,7 +404,7 @@ class CustomTrackerEntity(TrackerEntity):
         if self._auto_addr and self._lat is not None and self._lon is not None:
             asyncio.create_task(self._maybe_reverse_geocode(self._lat, self._lon))
 
-        # persist last known structured address
+        # persist last known structured address (non-sticky — but show if we have fresh cache)
         if self._address_cache:
             self._apply_address_to_attrs(self._address_cache)
 

@@ -1,4 +1,4 @@
-"""Options flow exposing Config Flow capabilities + extras (adds optional Person pick for device_tracker picture + place classification)."""
+"""Options flow exposing Config Flow capabilities + extras (adds address field selection)."""
 from __future__ import annotations
 
 from typing import Any, Dict, List
@@ -20,7 +20,7 @@ from .const import (
     CONF_DEVICE_CLASS,
     CONF_INHERIT_ATTRS,
     CONF_PERSON_ENTITY,
-    # sensor person-label bits (unchanged)
+    # sensor person-label bits
     CONF_SENSOR_MODE,
     SENSOR_MODE_MIRROR,
     SENSOR_MODE_PERSON_LABEL,
@@ -34,9 +34,9 @@ from .const import (
     DEFAULT_ADDRESS_MIN_MOVE_MI,
     DEFAULT_ADDRESS_MIN_INTERVAL_MIN,
     DEFAULT_GEOCODE_PROVIDER,
-    # NEW: classification toggle
-    CONF_CLASSIFY_PLACE,
-    DEFAULT_CLASSIFY_PLACE,
+    CONF_ADDRESS_FIELDS,
+    DEFAULT_ADDRESS_FIELDS,
+    SELECT_ADDRESS_FIELDS,
     # options keys (entry.options)
     CONF_ATTRIBUTE_SENSORS,
     CONF_BATTERY_ENTITY,
@@ -49,9 +49,6 @@ from .const import (
     CONF_HYPHENATE_STATE,
     CONF_PRESENCE_HELPER,
     DEFAULT_COMBINE_PRECISION,
-    # combine conversion/suffix (read from both data/options)
-    CONF_COMBINE_UNIT_MODE,
-    CONF_COMBINE_SUFFIX,
     # selectors
     SELECT_ANY_ENTITY,
     SELECT_PERSON,
@@ -89,8 +86,8 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         self._pending_attr_entity: str | None = None
 
         # Back-compat: migrate old single precision knob to new label precision (in-memory)
-        if CONF_COMBINE_PRECISION in self._opts and CONF_COMBINE_LABEL_PRECISION not in self._opts:
-            self._opts[CONF_COMBINE_LABEL_PRECISION] = self._opts.get(CONF_COMBINE_PRECISION, DEFAULT_COMBINE_PRECISION)
+        if CONF_COMBINE_PRECISION in self._opts and "combine_label_precision" not in self._opts:
+            self._opts["combine_label_precision"] = self._opts.get(CONF_COMBINE_PRECISION, DEFAULT_COMBINE_PRECISION)
 
     async def async_step_init(self, user_input=None):
         return await self.async_step_menu()
@@ -137,13 +134,13 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         person_now = data_now.get(CONF_PERSON_ENTITY, "")
         label_attr_now = data_now.get(CONF_LABEL_ATTR, DEFAULT_LABEL_ATTR)
 
-        # Auto-address + classification (dt OR sensor+person_label)
+        # Auto-address fields (used by: device_tracker OR sensor+person_label)
         auto_now = bool(data_now.get(CONF_AUTO_ADDRESS, True))
         min_move_now = float(data_now.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
         min_interval_now = int(data_now.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
         provider_now = data_now.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER)
         contact_now = data_now.get(CONF_GEOCODE_CONTACT, "")
-        classify_now = bool(data_now.get(CONF_CLASSIFY_PLACE, DEFAULT_CLASSIFY_PLACE))
+        addr_fields_now = data_now.get(CONF_ADDRESS_FIELDS, DEFAULT_ADDRESS_FIELDS)
 
         has_dc = platform_now in PLATFORMS_WITH_DEVICE_CLASS
 
@@ -177,16 +174,16 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 fields[vol.Required(CONF_PERSON_ENTITY, default=person_now)] = SELECT_PERSON
                 fields[vol.Optional(CONF_LABEL_ATTR, default=label_attr_now)] = str
 
-        # ---- Auto-address + classification (dt ALWAYS; sensor only when person_label) ----
+        # ---- Auto-address controls (device_tracker ALWAYS; sensor only when person_label) ----
         if (platform_now == "device_tracker") or ((platform_now == "sensor") and (mode_now == SENSOR_MODE_PERSON_LABEL)):
             fields[vol.Optional(CONF_AUTO_ADDRESS, default=auto_now)] = bool
-            fields[vol.Optional(CONF_CLASSIFY_PLACE, default=classify_now)] = bool
             fields[vol.Optional(CONF_ADDRESS_MIN_MOVE_MI, default=min_move_now)] = SELECT_MILES_SLIDER
             fields[vol.Optional(CONF_ADDRESS_MIN_INTERVAL_MIN, default=min_interval_now)] = SELECT_MINUTES_SLIDER
             fields[vol.Optional(CONF_GEOCODE_PROVIDER, default=provider_now)] = selector({
                 "select": {"options": [{"label": "OSM Nominatim (free)", "value": "nominatim"}], "mode": "list"}
             })
             fields[vol.Optional(CONF_GEOCODE_CONTACT, default=contact_now)] = str
+            fields[vol.Optional(CONF_ADDRESS_FIELDS, default=addr_fields_now)] = SELECT_ADDRESS_FIELDS
 
         schema = vol.Schema(fields)
 
@@ -220,15 +217,17 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                     if CONF_LABEL_ATTR in user_input:
                         staged[CONF_LABEL_ATTR] = str(user_input.get(CONF_LABEL_ATTR) or DEFAULT_LABEL_ATTR)
 
-            # Auto-address + classification staging
+            # Auto-address staging
             if (staged[CONF_PLATFORM] == "device_tracker") or ((staged[CONF_PLATFORM] == "sensor") and (staged.get(CONF_SENSOR_MODE, mode_now) == SENSOR_MODE_PERSON_LABEL)):
                 staged[CONF_AUTO_ADDRESS] = bool(user_input.get(CONF_AUTO_ADDRESS, auto_now))
-                staged[CONF_CLASSIFY_PLACE] = bool(user_input.get(CONF_CLASSIFY_PLACE, classify_now))
                 staged[CONF_ADDRESS_MIN_MOVE_MI] = float(user_input.get(CONF_ADDRESS_MIN_MOVE_MI, min_move_now))
                 staged[CONF_ADDRESS_MIN_INTERVAL_MIN] = int(user_input.get(CONF_ADDRESS_MIN_INTERVAL_MIN, min_interval_now))
                 staged[CONF_GEOCODE_PROVIDER] = str(user_input.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER))
                 if user_input.get(CONF_GEOCODE_CONTACT) is not None:
                     staged[CONF_GEOCODE_CONTACT] = str(user_input.get(CONF_GEOCODE_CONTACT) or "")
+                if user_input.get(CONF_ADDRESS_FIELDS) is not None:
+                    fl = user_input.get(CONF_ADDRESS_FIELDS, DEFAULT_ADDRESS_FIELDS)
+                    staged[CONF_ADDRESS_FIELDS] = list(fl) if isinstance(fl, list) else list(DEFAULT_ADDRESS_FIELDS)
 
             # stage only allowed keys into pending data
             for k, v in staged.items():
@@ -260,11 +259,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             self._pending_data[CONF_INHERIT_ATTRS] = user_input.get(CONF_INHERIT_ATTRS, [])
             return await self.async_step_menu()
 
-        return self.async_show_form(
-            step_id="attrs",
-            data_schema=schema,
-            description_placeholders={"current": ", ".join(current) or "none"},
-        )
+        return self.async_show_form(step_id="attrs", data_schema=schema)
 
     async def async_step_combine(self, user_input=None):
         o = self._opts

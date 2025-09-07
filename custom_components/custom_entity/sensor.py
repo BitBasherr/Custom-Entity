@@ -1,6 +1,4 @@
-"""Custom Sensor entity with Mirror mode, Person Label mode,
-Auto-address (structured), optional Combine conversion/suffix,
-and optional Place classification (Nominatim category/type)."""
+"""Custom Sensor entity with Mirror mode, Person Label mode, and optional Auto-address + combine conversion/suffix."""
 from __future__ import annotations
 
 import asyncio
@@ -17,7 +15,6 @@ from .const import (
     CONF_FRIENDLY_NAME,
     CONF_DEVICE_CLASS,
     CONF_INHERIT_ATTRS,
-    # combine
     CONF_COMBINE,
     CONF_COMBINE_ENTITY,
     CONF_COMBINE_ATTR_NAME,
@@ -32,7 +29,7 @@ from .const import (
     CONF_PERSON_ENTITY,
     CONF_LABEL_ATTR,
     DEFAULT_LABEL_ATTR,
-    # auto address
+    # auto address + fields
     CONF_AUTO_ADDRESS,
     CONF_ADDRESS_MIN_MOVE_MI,
     CONF_ADDRESS_MIN_INTERVAL_MIN,
@@ -40,17 +37,13 @@ from .const import (
     CONF_GEOCODE_CONTACT,
     DEFAULT_ADDRESS_MIN_MOVE_MI,
     DEFAULT_ADDRESS_MIN_INTERVAL_MIN,
+    CONF_ADDRESS_FIELDS,
+    DEFAULT_ADDRESS_FIELDS,
+    ADDRESS_FIELD_KEYS,
     # combine conversion
     CONF_COMBINE_UNIT_MODE,
     CONF_COMBINE_SUFFIX,
 )
-
-# Try to import the optional classification toggle; remain compatible if it’s not defined yet.
-try:
-    from .const import CONF_CLASSIFY_PLACE  # bool flag stored in entry.data
-except Exception:  # pragma: no cover
-    CONF_CLASSIFY_PLACE = "classify_place"
-
 from .geocode import async_reverse_geocode, haversine_miles
 
 
@@ -97,7 +90,6 @@ def _unit_hint(state_str: str, attrs: dict) -> Optional[str]:
 
 
 def _convert_to_minutes(val: float, mode: str, unit_hint: Optional[str]) -> tuple[float, bool]:
-    """Return (value, converted?) honoring explicit mode, else infer from unit hint."""
     mode = (mode or "auto").lower()
     if mode == "sec_to_min":
         return (val / 60.0, True)
@@ -138,7 +130,7 @@ class CustomSensorEntity(SensorEntity):
         if self._device_class:
             self._attr_device_class = self._device_class
 
-        # combine options (unchanged from your version)
+        # combine options
         self._combine = bool(o.get(CONF_COMBINE, d.get(CONF_COMBINE, False)))
         self._combine_entity = o.get(CONF_COMBINE_ENTITY, d.get(CONF_COMBINE_ENTITY))
         self._combine_attr_name = o.get(CONF_COMBINE_ATTR_NAME, d.get(CONF_COMBINE_ATTR_NAME, "combine"))
@@ -148,13 +140,18 @@ class CustomSensorEntity(SensorEntity):
         self._unit_mode = (o.get(CONF_COMBINE_UNIT_MODE, d.get(CONF_COMBINE_UNIT_MODE, "auto")) or "auto").lower()
         self._suffix = o.get(CONF_COMBINE_SUFFIX, d.get(CONF_COMBINE_SUFFIX, "")) or ""
 
-        # auto-address controls + optional classification
+        # auto-address controls
         self._auto_addr = bool(d.get(CONF_AUTO_ADDRESS, True))
         self._min_move_mi = float(d.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
         self._min_interval_min = int(d.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
         self._geocode_provider = d.get(CONF_GEOCODE_PROVIDER, "nominatim")
         self._geocode_contact = d.get(CONF_GEOCODE_CONTACT)
-        self._classify = bool(d.get(CONF_CLASSIFY_PLACE, False))  # safe default; becomes useful if you wire it
+
+        # which address fields to expose if present (non-sticky)
+        self._addr_fields_list: list[str] = d.get(CONF_ADDRESS_FIELDS, DEFAULT_ADDRESS_FIELDS)
+        if not isinstance(self._addr_fields_list, list):
+            self._addr_fields_list = list(DEFAULT_ADDRESS_FIELDS)
+        self._addr_fields_set = set([k for k in self._addr_fields_list if k in ADDRESS_FIELD_KEYS])
 
         self._state: Optional[str] = None
         self._extra_attrs: dict = {}
@@ -181,38 +178,29 @@ class CustomSensorEntity(SensorEntity):
         self._update()
         self.async_write_ha_state()
 
-    # ---------- address helpers ----------
     def _apply_address_to_attrs(self, info: Dict[str, Any]) -> Optional[str]:
-        """Write structured address (+ optional classification) into attributes and return line1."""
-        if not info:
+        """Write structured address into attributes (non-sticky) and return line1."""
+        if not isinstance(info, dict):
             return None
-        line1 = info.get("line1") or info.get("display_name")
 
-        # Primary address attribute (street + number)
+        # Clean previous address-like keys (avoid stickiness)
+        to_clean = set(ADDRESS_FIELD_KEYS) | {"full_address", self._label_attr}
+        for k in tuple(self._extra_attrs.keys()):
+            if k in to_clean:
+                self._extra_attrs.pop(k, None)
+
+        line1 = info.get("line1") or info.get("display_name")
         if line1:
             self._extra_attrs[self._label_attr] = line1
 
-        # Components
-        for key in ("city", "state", "township", "postcode", "county", "country", "neighbourhood"):
-            val = info.get(key)
-            if val:
-                self._extra_attrs[key] = val
-        if info.get("display_name"):
-            self._extra_attrs["full_address"] = info["display_name"]
-
-        # Optional place classification (only if your geocode returns these + flag enabled)
-        if self._classify:
-            for k in ("poi_name", "place_class", "place_type", "place_label"):
-                v = info.get(k)
-                if v:
-                    self._extra_attrs[k] = v
-            # convenience alias for templating
-            if "place_label" in info:
-                self._extra_attrs["type"] = info["place_label"]
+        for key in ADDRESS_FIELD_KEYS:
+            if key in self._addr_fields_set:
+                val = info.get(key) if key != "full_address" else info.get("display_name")
+                if val is not None and val != "":
+                    self._extra_attrs[key] = val
 
         return line1
 
-    # ---------- main update ----------
     def _update(self):
         self._extra_attrs = {}
 
@@ -220,8 +208,9 @@ class CustomSensorEntity(SensorEntity):
         if self._source_entity:
             src = self.hass.states.get(self._source_entity)
             if src and isinstance(src.attributes, dict):
+                reserved = {self._label_attr, *ADDRESS_FIELD_KEYS, "full_address"}
                 for k in self._inherit_attrs:
-                    if k in src.attributes:
+                    if k in src.attributes and k not in reserved:
                         self._extra_attrs[k] = src.attributes[k]
 
         # Determine base state
@@ -260,7 +249,7 @@ class CustomSensorEntity(SensorEntity):
             if self._address_cache:
                 self._apply_address_to_attrs(self._address_cache)
 
-        # Combine behavior (unchanged)
+        # Combine behavior
         if self._combine and self._combine_entity:
             co = self.hass.states.get(self._combine_entity)
             if co:
