@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from typing import Optional, Dict, Any
-
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/reverse"
 
 
-# -------------------- helpers to pick common address bits --------------------
+# -------------------- helpers to pick common address bits -------------------- #
 
 def _pick_city(addr: Dict[str, Any]) -> Optional[str]:
     """Prefer city-like levels in a sensible order."""
@@ -40,7 +39,30 @@ def _pick_neighbourhood(addr: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-# -------------------- primary line and classification ------------------------
+def _pick_place_name(data: Dict[str, Any], addr: Dict[str, Any], display_name: str) -> Optional[str]:
+    """
+    Robustly detect a POI/venue name.
+    1) Primary: data["name"] (Nominatim's canonical POI name)
+    2) Address fallbacks: building / house_name / house
+    3) As a last resort: the first display_name token (often a venue)
+    """
+    # 1) explicit POI name
+    name = data.get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+
+    # 2) address-based venue-ish fallbacks
+    for k in ("building", "house_name", "house"):
+        v = addr.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+
+    # 3) first segment of display_name
+    first = (display_name or "").split(",")[0].strip()
+    return first or None
+
+
+# -------------------- primary line and classification ------------------------ #
 
 def _make_line1(addr: Dict[str, Any], display_name: str) -> str:
     """Line 1: '123 Main St' if available; else first display segment."""
@@ -99,7 +121,7 @@ def _classify_place(
     return "place", display_line1 or "place"
 
 
-# -------------------- “smart” human label for POIs and common types ----------
+# -------------------- “smart” human label for POIs and common types ---------- #
 
 _SMART_LABEL_MAP = {
     # --- Transport / Parking ---
@@ -268,7 +290,7 @@ def _smart_place_label(
     return base_line1 or _pick_city(addr) or "place"
 
 
-# -------------------- public API --------------------------------------------
+# -------------------- public API -------------------------------------------- #
 
 async def async_reverse_geocode(
     hass,
@@ -311,7 +333,7 @@ async def async_reverse_geocode(
     except Exception:
         return None
 
-    display = data.get("display_name", "")
+    display = data.get("display_name", "") or ""
     addr = data.get("address") or {}
     if not isinstance(addr, dict):
         addr = {}
@@ -324,8 +346,8 @@ async def async_reverse_geocode(
     # Classify
     place_type, place_label = _classify_place(addr, line1, category, type_detail)
 
-    # Top-level POI name if present
-    place_name = data.get("name")  # e.g., "Allied Midwest Merchandisers"
+    # Robust POI name
+    place_name = _pick_place_name(data, addr, display)  # ← keeps Allied Midwest Merchandisers, etc.
 
     # Smart readable label
     smart_label = _smart_place_label(place_name, place_type, type_detail, line1, addr)
