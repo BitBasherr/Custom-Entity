@@ -44,7 +44,7 @@ from .const import (
     SELECT_MILES_SLIDER,
     SELECT_MINUTES_SLIDER,
     SELECT_PRECISION,
-    # combine (stored initially in data; options flow can refine later)
+    # combine (stored in data here; options flow can refine later)
     CONF_COMBINE,
     CONF_COMBINE_ENTITY,
     CONF_COMBINE_ATTR_NAME,
@@ -61,11 +61,20 @@ SENSOR_MODE_OPTIONS = [
     {"label": "Person Label (sensor)", "value": SENSOR_MODE_PERSON_LABEL},
 ]
 
-# Internal key (kept out of const.py as requested)
-K_SMART_APPEND_CITY = "smart_label_append_city"
+
+def _guess_device_class(hass, entity_id: str) -> str | None:
+    st = hass.states.get(entity_id)
+    if not st:
+        return None
+    dc = st.attributes.get("device_class")
+    if isinstance(dc, str) and dc:
+        return dc
+    return None
+
 
 # ---------- Address fields helpers ----------
 _ALLOWED_ADDR_VALUES = tuple(opt["value"] for opt in ADDRESS_FIELD_OPTIONS)
+
 
 def _sanitize_address_list(value) -> list[str]:
     """Ensure list contains only allowed address field tokens; default to ALL if empty/invalid."""
@@ -77,18 +86,9 @@ def _sanitize_address_list(value) -> list[str]:
         value = []
     cleaned = [v for v in value if v in _ALLOWED_ADDR_VALUES]
     if not cleaned:
-        cleaned = list(_ALLOWED_ADDR_VALUES)  # default to ALL
+        # Default to ALL available fields as requested
+        cleaned = list(_ALLOWED_ADDR_VALUES)
     return cleaned
-
-
-def _guess_device_class(hass, entity_id: str) -> str | None:
-    st = hass.states.get(entity_id)
-    if not st:
-        return None
-    dc = st.attributes.get("device_class")
-    if isinstance(dc, str) and dc:
-        return dc
-    return None
 
 
 class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -125,7 +125,7 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # Tracker-specific branching
             if platform == "device_tracker":
                 self._data = data
-                return await self.async_step_reverse_geocoder()
+                return await self.async_step_tracker_details()
 
             # Optional device class suggestion
             if platform in PLATFORMS_WITH_DEVICE_CLASS:
@@ -152,8 +152,8 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }),
         )
 
-    async def async_step_reverse_geocoder(self, user_input=None):
-        """device_tracker reverse geocoder step (grouped section)."""
+    async def async_step_tracker_details(self, user_input=None):
+        """device_tracker-only: reverse geocode knobs + address fields."""
         if user_input is not None:
             tracker = user_input.get("tracker_entity") or self._data.get(CONF_SOURCE_ENTITY)
             self._data[CONF_SOURCE_ENTITY] = str(tracker) if tracker else ""
@@ -170,11 +170,9 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             fields = _sanitize_address_list(user_input.get(CONF_ADDRESS_FIELDS))
             self._data[CONF_ADDRESS_FIELDS] = fields
 
-            # New (kept out of const.py): initial storage in data, OptionsFlow can override in options
-            self._data[K_SMART_APPEND_CITY] = bool(user_input.get(K_SMART_APPEND_CITY, False))
-
             return await self.async_step_inherit_attrs()
 
+        # Defaults for the control (sanitize any existing data)
         default_fields = _sanitize_address_list(self._data.get(CONF_ADDRESS_FIELDS))
 
         schema = vol.Schema({
@@ -188,12 +186,11 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }),
             vol.Optional(CONF_GEOCODE_CONTACT): str,
             vol.Optional(CONF_ADDRESS_FIELDS, default=default_fields): SELECT_ADDRESS_FIELDS,
-            vol.Optional(K_SMART_APPEND_CITY, default=False): bool,
         })
-        return self.async_show_form(step_id="reverse_geocoder", data_schema=schema)
+        return self.async_show_form(step_id="tracker_details", data_schema=schema)
 
     async def async_step_person_label_details(self, user_input=None):
-        """sensor-only when sensor_mode=person_label: person+tracker+reverse geocoder section."""
+        """sensor-only when sensor_mode=person_label: person+tracker+address fields."""
         if user_input is not None:
             self._data[CONF_PERSON_ENTITY] = str(user_input[CONF_PERSON_ENTITY])
             self._data[CONF_SOURCE_ENTITY] = str(user_input.get(CONF_SOURCE_ENTITY) or user_input.get("tracker_entity") or "")
@@ -209,8 +206,6 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             fields = _sanitize_address_list(user_input.get(CONF_ADDRESS_FIELDS))
             self._data[CONF_ADDRESS_FIELDS] = fields
-
-            self._data[K_SMART_APPEND_CITY] = bool(user_input.get(K_SMART_APPEND_CITY, False))
 
             return await self.async_step_inherit_attrs()
 
@@ -229,7 +224,6 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }),
             vol.Optional(CONF_GEOCODE_CONTACT): str,
             vol.Optional(CONF_ADDRESS_FIELDS, default=default_fields): SELECT_ADDRESS_FIELDS,
-            vol.Optional(K_SMART_APPEND_CITY, default=False): bool,
         })
         return self.async_show_form(step_id="person_label_details", data_schema=schema)
 
