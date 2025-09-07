@@ -99,13 +99,18 @@ def _unit_hint(state_str: str, attrs: dict) -> Optional[str]:
     return None
 
 
-def _convert_to_minutes_auto(val: float, unit_hint: Optional[str]) -> tuple[float, bool]:
-    """Convert seconds/hours to minutes if we can infer it; return (value, converted?)."""
+def _convert_to_minutes_auto(val: float, unit_hint: Optional[str]) -> tuple[float, bool, str]:
+    """
+    Convert seconds/hours to minutes if we can infer it; return (value, converted?, eta_unit).
+    eta_unit is "min" when converted or when the hint already indicated minutes; otherwise "".
+    """
     if unit_hint in ("s", "sec", "second", "seconds"):
-        return (val / 60.0, True)
+        return (val / 60.0, True, "min")
     if unit_hint in ("h", "hr", "hrs", "hour", "hours"):
-        return (val * 60.0, True)
-    return (val, False)
+        return (val * 60.0, True, "min")
+    if unit_hint in ("m", "min", "mins", "minute", "minutes"):
+        return (val, False, "min")
+    return (val, False, "")
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
@@ -226,9 +231,9 @@ class CustomTrackerEntity(TrackerEntity):
             if co is not None:
                 num = _float_from_state(co.state)
                 if num is not None:
-                    minutes, converted = _convert_to_minutes_auto(num, _unit_hint(co.state, co.attributes or {}))
-                    txt = _fmt_number(minutes if converted else num, self._label_prec)
-                    suffix = " min" if converted else ""
+                    minutes, converted, eta_unit = _convert_to_minutes_auto(num, _unit_hint(co.state, co.attributes or {}))
+                    txt = _fmt_number(minutes if converted or eta_unit == "min" else num, self._label_prec)
+                    suffix = " min" if converted or eta_unit == "min" else ""
                     return f"{base} - {txt}{suffix}"
                 return f"{base} - {co.state}"
             return base
@@ -357,7 +362,9 @@ class CustomTrackerEntity(TrackerEntity):
                 self._acc = None
 
             # mirrored attributes (do not step on reserved keys we control)
-            reserved = {"location_zone", "eta_minutes", "eta_label", self._label_attr, *ADDRESS_FIELD_KEYS, "full_address"}
+            reserved = {"location_zone", "eta_minutes", "eta_label", "eta_source_entity",
+                        "eta_source_name", "eta_unit", "eta_raw", "eta_converted",
+                        self._label_attr, *ADDRESS_FIELD_KEYS, "full_address"}
             for k in self._inherit_attrs:
                 if k in src.attributes and k not in reserved:
                     self._extra_attrs[k] = src.attributes[k]
@@ -379,26 +386,36 @@ class CustomTrackerEntity(TrackerEntity):
         self._extra_attrs["location_zone"] = base_zone  # renders as “Location zone”
 
         # --- Combine value (attribute when NOT hyphenating); always provide ETA helpers ---
-        combined_val_text = None
         if self._combine and self._combine_entity:
             co = self.hass.states.get(self._combine_entity)
             if co:
+                # Always publish metadata about where ETA came from
+                self._extra_attrs["eta_source_entity"] = self._combine_entity
+                self._extra_attrs["eta_source_name"] = co.attributes.get("friendly_name") or self._combine_entity
+                self._extra_attrs["eta_raw"] = co.state
+
                 num = _float_from_state(co.state)
                 if num is not None:
-                    minutes, converted = _convert_to_minutes_auto(num, _unit_hint(co.state, co.attributes or {}))
+                    minutes, converted, eta_unit = _convert_to_minutes_auto(num, _unit_hint(co.state, co.attributes or {}))
+                    # choose precision depending on hyphenation
                     use_prec = self._attr_prec if not self._hyphenate else self._label_prec
-                    val_txt = _fmt_number(minutes if converted else num, use_prec)
+                    # numeric attribute for machine use
                     if not self._hyphenate:
-                        self._extra_attrs[self._combine_attr_name or "combine"] = val_txt
-                    combined_val_text = val_txt
+                        self._extra_attrs[self._combine_attr_name or "combine"] = _fmt_number(minutes if (converted or eta_unit == "min") else num, use_prec)
+                    # human label and helpers
+                    val_txt = _fmt_number(minutes if (converted or eta_unit == "min") else num, use_prec)
+                    self._extra_attrs["eta_minutes"] = float(val_txt)
+                    self._extra_attrs["eta_label"] = f"{val_txt} min" if (converted or eta_unit == "min") else val_txt
+                    self._extra_attrs["eta_converted"] = bool(converted or eta_unit == "min")
+                    self._extra_attrs["eta_unit"] = "min" if (converted or eta_unit == "min") else (eta_unit or "")
                 else:
+                    # non-numeric source; keep metadata and plain text
                     if not self._hyphenate:
                         self._extra_attrs[self._combine_attr_name or "combine"] = str(co.state)
-                    combined_val_text = str(co.state)
-
-        if combined_val_text is not None:
-            self._extra_attrs["eta_minutes"] = combined_val_text
-            self._extra_attrs["eta_label"] = f"{combined_val_text} min"
+                    self._extra_attrs["eta_minutes"] = None
+                    self._extra_attrs["eta_label"] = str(co.state)
+                    self._extra_attrs["eta_converted"] = False
+                    self._extra_attrs["eta_unit"] = ""
 
         # auto-address (write structured attributes)
         if self._auto_addr and self._lat is not None and self._lon is not None:
