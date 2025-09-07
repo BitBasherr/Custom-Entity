@@ -37,7 +37,7 @@ SENSOR_MODE_PERSON_LABEL = "person_label"
 
 CONF_PERSON_ENTITY = "person_entity"
 CONF_LABEL_ATTR = "label_attr"
-DEFAULT_LABEL_ATTR = "address"   # attribute name to expose street+number
+DEFAULT_LABEL_ATTR = "address"   # attribute name to expose street+number (or your choice)
 
 # ---------------- Reverse geocode (stored in entry.data) -----------------
 CONF_AUTO_ADDRESS = "auto_address"
@@ -52,12 +52,17 @@ DEFAULT_GEOCODE_PROVIDER = "nominatim"
 # ---------------- Address fields selection -------------------------------
 CONF_ADDRESS_FIELDS = "address_fields"
 
-# Full list of structured address keys our geocoder can return
+# Full list of structured address/POI keys our geocoder can return
 ADDRESS_FIELD_KEYS = [
+    # canonical address bits
     "city", "state", "postcode", "county", "country",
     "neighbourhood", "suburb", "city_district", "borough", "quarter",
     "township", "municipality", "town", "village", "hamlet",
+    # POI / building related
+    "poi_name", "house_name", "brand", "operator",
+    # classification / labeling
     "place_type", "place_label", "osm_category", "osm_type_detail",
+    # convenience
     "full_address"  # derived from display_name
 ]
 
@@ -84,6 +89,12 @@ ADDRESS_FIELD_OPTIONS = [
     {"label": "Town",               "value": "town"},
     {"label": "Village",            "value": "village"},
     {"label": "Hamlet",             "value": "hamlet"},
+    # POI / business extras
+    {"label": "POI / Place name",   "value": "poi_name"},
+    {"label": "House name",         "value": "house_name"},
+    {"label": "Brand",              "value": "brand"},
+    {"label": "Operator",           "value": "operator"},
+    # classification
     {"label": "Place Type",         "value": "place_type"},
     {"label": "Place Label",        "value": "place_label"},
     {"label": "OSM Category",       "value": "osm_category"},
@@ -185,7 +196,7 @@ DATA_MUTABLE_KEYS = {
     CONF_ADDRESS_MIN_INTERVAL_MIN,
     CONF_GEOCODE_PROVIDER,
     CONF_GEOCODE_CONTACT,
-    CONF_ADDRESS_FIELDS,  # allow changing which address parts to expose
-    # (add combine unit/suffix here if you decide to store them in data too)
+    CONF_ADDRESS_FIELDS,  # allow changing which address/POI parts to expose
+    # you may add combine unit/suffix here if you decide to store them in data
     # CONF_COMBINE_UNIT_MODE, CONF_COMBINE_SUFFIX,
 }

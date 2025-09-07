@@ -35,6 +35,10 @@ def _pick_neighbourhood(addr: Dict[str, Any]) -> Optional[str]:
 
 
 def _make_line1(addr: Dict[str, Any], display_name: str) -> str:
+    """
+    Prefer house number + road. If missing, fall back to best available
+    road-like field, otherwise the first part of display_name.
+    """
     house = addr.get("house_number")
     road = _pick_road(addr)
     if house and road:
@@ -82,17 +86,27 @@ async def async_reverse_geocode(
     lang: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Minimal Nominatim reverse geocode with structured output + classification.
-    Returns a dict with:
-      line1, city, state, postcode, county, country, township, neighbourhood,
-      suburb, city_district, borough, quarter, town, village, hamlet, municipality,
+    Nominatim reverse geocode with structured output + classification.
+    Requests namedetails and extratags so we can surface POI/business data.
+
+    Returns a dict with (subset shown):
+      line1, city, state, postcode, county, country,
+      township, neighbourhood, suburb, city_district, borough, quarter,
+      town, village, hamlet, municipality,
+      poi_name, house_name, brand, operator,
       osm_category, osm_type_detail, place_type, place_label, display_name
     or None on failure.
     """
     if lat is None or lon is None:
         return None
 
-    params = {"format": "jsonv2", "lat": f"{lat}", "lon": f"{lon}"}
+    params = {
+        "format": "jsonv2",
+        "lat": f"{lat}",
+        "lon": f"{lon}",
+        "namedetails": 1,   # expose 'namedetails' block
+        "extratags": 1,     # expose 'extratags' (brand/operator/etc.)
+    }
     headers = {
         "Accept": "application/json",
         "User-Agent": f"HA-CustomEntity/1.0 ({contact})" if contact else "HA-CustomEntity/1.0",
@@ -109,13 +123,24 @@ async def async_reverse_geocode(
     except Exception:
         return None
 
-    display = data.get("display_name", "")
+    display = data.get("display_name", "") or ""
     addr = data.get("address") or {}
     if not isinstance(addr, dict):
         addr = {}
 
+    namedetails = data.get("namedetails") or {}
+    if not isinstance(namedetails, dict):
+        namedetails = {}
+
+    extratags = data.get("extratags") or {}
+    if not isinstance(extratags, dict):
+        extratags = {}
+
     line1 = _make_line1(addr, display)
     place_type, place_label = _classify_place(addr, line1)
+
+    # Primary POI / place name
+    poi_name = data.get("name") or namedetails.get("name") or None
 
     result: Dict[str, Any] = {
         "line1": line1,
@@ -134,14 +159,21 @@ async def async_reverse_geocode(
         "village": addr.get("village"),
         "hamlet": addr.get("hamlet"),
         "municipality": addr.get("municipality"),
+        # POI / building extras
+        "poi_name": poi_name,
+        "house_name": addr.get("house_name"),
+        "brand": extratags.get("brand"),
+        "operator": extratags.get("operator"),
+        # Classification
         "osm_category": data.get("category"),
         "osm_type_detail": data.get("type"),
         "place_type": place_type,
         "place_label": place_label,
+        # convenience
         "display_name": display,
     }
     # Strip empties
-    return {k: v for k, v in result.items() if v}
+    return {k: v for k, v in result.items() if v or v == 0}
 
 
 def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
