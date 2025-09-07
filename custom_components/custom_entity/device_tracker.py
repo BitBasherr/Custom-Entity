@@ -1,5 +1,6 @@
 """Custom device_tracker with mirror, presence helper, optional Combine (hyphenate),
-Auto-address (structured + selectable fields), and Person picture sync (manual override + auto-detect)."""
+Auto-address (structured + selectable fields), Person picture sync, ETA provenance,
+and smart/parking labeling (with optional city append) + sticky place helpers."""
 from __future__ import annotations
 
 import asyncio
@@ -48,6 +49,10 @@ from .const import (
 )
 
 from .geocode import async_reverse_geocode, haversine_miles
+
+
+# Internal options key (keep consts unchanged)
+K_SMART_APPEND_CITY = "smart_label_append_city"
 
 
 def _truthy(val) -> bool:
@@ -115,7 +120,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 class CustomTrackerEntity(TrackerEntity):
     """Mirror a source tracker’s lat/lon/attrs, presence helper override,
     Combine with optional hyphenation, reverse-geocoded structured address (selectable fields),
-    and Person picture sync (manual override or auto-detect)."""
+    Person picture sync (manual override or auto-detect), and smart place labeling."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
         self.hass = hass
@@ -163,6 +168,9 @@ class CustomTrackerEntity(TrackerEntity):
         if not isinstance(self._addr_fields_list, list):
             self._addr_fields_list = list(DEFAULT_ADDRESS_FIELDS)
         self._addr_fields_set = set([k for k in self._addr_fields_list if k in ADDRESS_FIELD_KEYS])
+
+        # smart-label city append
+        self._smart_append_city: bool = bool(o.get(K_SMART_APPEND_CITY, d.get(K_SMART_APPEND_CITY, False)))
 
         # dynamic state
         self._lat: Optional[float] = None
@@ -308,25 +316,61 @@ class CustomTrackerEntity(TrackerEntity):
         if not isinstance(info, dict):
             return
 
+        # Remove any previous address-like keys we control, to avoid stickiness
         to_clean = set(ADDRESS_FIELD_KEYS) | {"full_address", self._label_attr}
         for k in tuple(self._extra_attrs.keys()):
             if k in to_clean:
                 self._extra_attrs.pop(k, None)
 
+        # Primary address line (street + number or first display part)
         line1 = info.get("line1") or info.get("display_name")
         if line1:
             self._extra_attrs[self._label_attr] = line1
 
+        # Optional selected fields (only add if present in fresh info)
         for key in ADDRESS_FIELD_KEYS:
             if key in self._addr_fields_set:
                 val = info.get(key) if key != "full_address" else info.get("display_name")
                 if val is not None and val != "":
                     self._extra_attrs[key] = val
 
+    def _postprocess_smart_label(self, base_zone: Optional[str]):
+        """Parking 'at {zone/poi}', append city (optional), and sticky helpers."""
+        if not self._address_cache:
+            return
+        info = self._address_cache
+
+        smart = self._extra_attrs.get("smart_place_label") or info.get("smart_place_label")
+        detail = (info.get("osm_type_detail") or "").lower()
+        city = self._extra_attrs.get("city") or info.get("city")
+
+        # If it's parking and we are inside a named zone, prefer that name
+        if detail in {"parking", "parking_entrance", "parking_space"}:
+            if base_zone and base_zone not in {"not_home", "home"}:
+                smart = f"Parking Lot at {base_zone}"
+
+        # Optional city suffix
+        if smart and self._smart_append_city and city and city.lower() not in str(smart).lower():
+            smart = f"{smart} — {city}"
+
+        if smart:
+            self._extra_attrs["smart_place_label"] = smart
+
+        # Sticky helpers (do not clean on update)
+        ptype = info.get("place_type")
+        if ptype:
+            self._extra_attrs["place_type_sticky"] = ptype
+        if info.get("osm_type_detail"):
+            self._extra_attrs["place_detail_sticky"] = info.get("osm_type_detail")
+        # category-style sticky (detail wins, else type)
+        self._extra_attrs["place_category_sticky"] = info.get("osm_type_detail") or ptype
+
     # ---------- update helpers ----------
     def _refresh(self):
+        # Start fresh each update
         self._extra_attrs = {}
 
+        # If no manual person, keep auto-detecting and start listening when it changes
         if not self._person_entity:
             new_person = self._find_linked_person()
             if new_person and new_person != self._resolved_person:
@@ -349,39 +393,51 @@ class CustomTrackerEntity(TrackerEntity):
             except Exception:
                 self._acc = None
 
-            reserved = {"location_zone", "eta_minutes", "eta_label", "eta_source_entity", "eta_source_name", "eta_source_state", self._label_attr, *ADDRESS_FIELD_KEYS, "full_address"}
+            # mirrored attributes (do not step on reserved keys we control)
+            reserved = {"location_zone", "eta_minutes", "eta_label", self._label_attr, *ADDRESS_FIELD_KEYS, "full_address"}
             for k in self._inherit_attrs:
                 if k in src.attributes and k not in reserved:
                     self._extra_attrs[k] = src.attributes[k]
 
+        # battery passthrough
         if self._battery_entity:
             batt = self.hass.states.get(self._battery_entity)
             if batt:
                 self._extra_attrs["battery_level"] = batt.state
 
+        # user-defined extra sensors
         for friendly, ent_id in self._extra_map.items():
             st = self.hass.states.get(ent_id)
             if st is not None:
                 self._extra_attrs[friendly] = st.state
 
+        # --- UI helper: always expose the base zone name ---
         base_zone = self._base_zone_name() or "not_home"
-        self._extra_attrs["location_zone"] = base_zone
+        self._extra_attrs["location_zone"] = base_zone  # renders as “Location zone”
 
+        # --- Combine value + provenance (attribute when NOT hyphenating); always provide ETA helpers ---
         combined_val_text = None
         if self._combine and self._combine_entity:
             co = self.hass.states.get(self._combine_entity)
             if co:
+                # provenance
                 self._extra_attrs["eta_source_entity"] = self._combine_entity
-                self._extra_attrs["eta_source_name"] = co.name if hasattr(co, "name") else self._combine_entity
+                self._extra_attrs["eta_source_name"] = co.attributes.get("friendly_name") or self._combine_entity
                 self._extra_attrs["eta_source_state"] = co.state
+
                 num = _float_from_state(co.state)
+                unit_hint = _unit_hint(co.state, co.attributes or {})
                 if num is not None:
-                    minutes, converted = _convert_to_minutes_auto(num, _unit_hint(co.state, co.attributes or {}))
+                    minutes, converted = _convert_to_minutes_auto(num, unit_hint)
                     use_prec = self._attr_prec if not self._hyphenate else self._label_prec
                     val_txt = _fmt_number(minutes if converted else num, use_prec)
                     if not self._hyphenate:
                         self._extra_attrs[self._combine_attr_name or "combine"] = val_txt
                     combined_val_text = val_txt
+
+                    self._extra_attrs["eta_raw"] = num
+                    self._extra_attrs["eta_converted"] = bool(converted)
+                    self._extra_attrs["eta_unit"] = "min" if converted else (unit_hint or "")
                 else:
                     if not self._hyphenate:
                         self._extra_attrs[self._combine_attr_name or "combine"] = str(co.state)
@@ -389,14 +445,21 @@ class CustomTrackerEntity(TrackerEntity):
 
         if combined_val_text is not None:
             self._extra_attrs["eta_minutes"] = combined_val_text
-            self._extra_attrs["eta_label"] = f"{combined_val_text} min"
+            # if we converted to minutes, eta_unit already "min"
+            unit = self._extra_attrs.get("eta_unit")
+            suffix = " min" if (unit == "min" or not unit) else f" {unit}"
+            self._extra_attrs["eta_label"] = f"{combined_val_text}{suffix}"
 
+        # auto-address (write structured attributes)
         if self._auto_addr and self._lat is not None and self._lon is not None:
             asyncio.create_task(self._maybe_reverse_geocode(self._lat, self._lon))
 
+        # persist last known structured address (non-sticky — but show if we have fresh cache)
         if self._address_cache:
             self._apply_address_to_attrs(self._address_cache)
+            self._postprocess_smart_label(base_zone)
 
+        # update picture from person/source
         self._update_picture()
 
     async def _maybe_reverse_geocode(self, lat: float, lon: float):
@@ -410,11 +473,7 @@ class CustomTrackerEntity(TrackerEntity):
 
         info = None
         if self._geocode_provider == "nominatim":
-            # City in parking label is controlled by Address fields: include only if 'city' is selected.
-            include_city = "city" in self._addr_fields_set
-            info = await async_reverse_geocode(
-                self.hass, lat, lon, contact=self._geocode_contact, include_city_in_parking=include_city
-            )
+            info = await async_reverse_geocode(self.hass, lat, lon, contact=self._geocode_contact)
 
         if info:
             self._address_cache = info
@@ -422,4 +481,5 @@ class CustomTrackerEntity(TrackerEntity):
             self._last_lookup_lat = lat
             self._last_lookup_lon = lon
             self._apply_address_to_attrs(info)
+            self._postprocess_smart_label(self._base_zone_name() or "not_home")
             self.async_write_ha_state()

@@ -1,4 +1,6 @@
-"""Custom Sensor entity with Mirror mode, Person Label mode, and optional Auto-address + combine conversion/suffix."""
+"""Custom Sensor entity with Mirror mode, Person Label mode, optional Auto-address,
+combine conversion/suffix, smart/parking labeling (with optional city append),
+and ETA provenance."""
 from __future__ import annotations
 
 import asyncio
@@ -45,6 +47,9 @@ from .const import (
     CONF_COMBINE_SUFFIX,
 )
 from .geocode import async_reverse_geocode, haversine_miles
+
+# Internal options key (keep consts unchanged)
+K_SMART_APPEND_CITY = "smart_label_append_city"
 
 
 def _to_int(x, fallback: int) -> int:
@@ -153,6 +158,9 @@ class CustomSensorEntity(SensorEntity):
             self._addr_fields_list = list(DEFAULT_ADDRESS_FIELDS)
         self._addr_fields_set = set([k for k in self._addr_fields_list if k in ADDRESS_FIELD_KEYS])
 
+        # smart label option
+        self._smart_append_city: bool = bool(o.get(K_SMART_APPEND_CITY, d.get(K_SMART_APPEND_CITY, False)))
+
         self._state: Optional[str] = None
         self._extra_attrs: dict = {}
 
@@ -183,6 +191,7 @@ class CustomSensorEntity(SensorEntity):
         if not isinstance(info, dict):
             return None
 
+        # Clean previous address-like keys (avoid stickiness)
         to_clean = set(ADDRESS_FIELD_KEYS) | {"full_address", self._label_attr}
         for k in tuple(self._extra_attrs.keys()):
             if k in to_clean:
@@ -198,11 +207,31 @@ class CustomSensorEntity(SensorEntity):
                 if val is not None and val != "":
                     self._extra_attrs[key] = val
 
+        # Smart label post-process (parking + optional city)
+        smart = self._extra_attrs.get("smart_place_label")
+        if smart:
+            detail = (info.get("osm_type_detail") or "").lower()
+            city = self._extra_attrs.get("city") or info.get("city")
+            if detail in {"parking", "parking_entrance", "parking_space"}:
+                # If we know a person or tracker zone here, we can't access zone easily from pure sensor;
+                # keep geocoder's "Parking Lot at {name/line1}" result.
+                pass
+            if self._smart_append_city and city and city.lower() not in smart.lower():
+                self._extra_attrs["smart_place_label"] = f"{smart} — {city}"
+
+        # Sticky helpers
+        if info.get("place_type"):
+            self._extra_attrs["place_type_sticky"] = info.get("place_type")
+        if info.get("osm_type_detail"):
+            self._extra_attrs["place_detail_sticky"] = info.get("osm_type_detail")
+        self._extra_attrs["place_category_sticky"] = info.get("osm_type_detail") or info.get("place_type")
+
         return line1
 
     def _update(self):
         self._extra_attrs = {}
 
+        # Mirror chosen attributes from source (both modes)
         if self._source_entity:
             src = self.hass.states.get(self._source_entity)
             if src and isinstance(src.attributes, dict):
@@ -211,6 +240,7 @@ class CustomSensorEntity(SensorEntity):
                     if k in src.attributes and k not in reserved:
                         self._extra_attrs[k] = src.attributes[k]
 
+        # Determine base state
         if self._mode == SENSOR_MODE_PERSON_LABEL:
             self._extra_attrs["entity_note"] = "Sensor-only label (not a Person)."
 
@@ -224,11 +254,13 @@ class CustomSensorEntity(SensorEntity):
                 if src:
                     label_val = src.attributes.get(self._label_attr)
 
+            # If missing and auto-address is enabled, try reverse-geocoding
             if (label_val in (None, "")) and self._auto_addr:
                 lat, lon = self._best_latlon()
                 if lat is not None and lon is not None:
                     asyncio.create_task(self._maybe_reverse_geocode(lat, lon))
 
+            # If we already have a cached structured address, populate attrs and use line1 as state
             if self._address_cache:
                 line1 = self._apply_address_to_attrs(self._address_cache)
                 if line1 and not label_val:
@@ -236,18 +268,27 @@ class CustomSensorEntity(SensorEntity):
 
             self._state = "" if label_val in (None, "") else str(label_val)
         else:
+            # Mirror mode — copy the source state verbatim
             src = self.hass.states.get(self._source_entity) if self._source_entity else None
             self._state = None if not src else src.state
 
+            # In mirror mode, still show cached structured address as attributes if present
             if self._address_cache:
                 self._apply_address_to_attrs(self._address_cache)
 
+        # Combine behavior + provenance
         if self._combine and self._combine_entity:
             co = self.hass.states.get(self._combine_entity)
             if co:
                 num = _float_from_state(co.state)
+                unit_hint = _unit_hint(co.state, co.attributes or {})
+                # provenance
+                self._extra_attrs["eta_source_entity"] = self._combine_entity
+                self._extra_attrs["eta_source_name"] = co.attributes.get("friendly_name") or self._combine_entity
+                self._extra_attrs["eta_source_state"] = co.state
+
                 if num is not None:
-                    minutes, applied = _convert_to_minutes(num, self._unit_mode, _unit_hint(co.state, co.attributes or {}))
+                    minutes, applied = _convert_to_minutes(num, self._unit_mode, unit_hint)
                     if self._hyphenate:
                         txt = _fmt_number(minutes if applied else num, self._label_prec)
                         use_suffix = self._suffix
@@ -259,6 +300,14 @@ class CustomSensorEntity(SensorEntity):
                     else:
                         val = minutes if applied else num
                         self._extra_attrs[self._combine_attr_name or "combine"] = _fmt_number(val, self._attr_prec)
+
+                    self._extra_attrs["eta_raw"] = num
+                    self._extra_attrs["eta_converted"] = bool(applied)
+                    self._extra_attrs["eta_unit"] = "min" if applied or self._unit_mode in ("sec_to_min", "hr_to_min") else (unit_hint or "")
+                    self._extra_attrs["eta_minutes"] = _fmt_number(minutes if applied else num, self._attr_prec)
+                    unit = self._extra_attrs.get("eta_unit")
+                    suffix = " min" if (unit == "min" or not unit) else f" {unit}"
+                    self._extra_attrs["eta_label"] = f"{self._extra_attrs['eta_minutes']}{suffix}"
                 else:
                     if self._hyphenate:
                         base = "" if self._state in (None, "unknown", "unavailable") else str(self._state)
@@ -283,8 +332,10 @@ class CustomSensorEntity(SensorEntity):
 
     async def _maybe_reverse_geocode(self, lat: float, lon: float):
         now = monotonic()
+        # interval check
         if now - self._last_lookup_ts < self._min_interval_min * 60:
             return
+        # distance check
         if self._last_lookup_lat is not None and self._last_lookup_lon is not None:
             moved = haversine_miles(self._last_lookup_lat, self._last_lookup_lon, lat, lon)
             if moved < self._min_move_mi:
@@ -292,11 +343,7 @@ class CustomSensorEntity(SensorEntity):
 
         info = None
         if self._geocode_provider == "nominatim":
-            # City in parking label is controlled by Address fields: include only if 'city' is selected.
-            include_city = "city" in self._addr_fields_set
-            info = await async_reverse_geocode(
-                self.hass, lat, lon, contact=self._geocode_contact, include_city_in_parking=include_city
-            )
+            info = await async_reverse_geocode(self.hass, lat, lon, contact=self._geocode_contact)
 
         if info:
             self._address_cache = info
@@ -304,6 +351,7 @@ class CustomSensorEntity(SensorEntity):
             self._last_lookup_lat = lat
             self._last_lookup_lon = lon
 
+            # Apply to attributes/state
             line1 = self._apply_address_to_attrs(info)
             if self._mode == SENSOR_MODE_PERSON_LABEL and line1:
                 self._state = str(line1)
