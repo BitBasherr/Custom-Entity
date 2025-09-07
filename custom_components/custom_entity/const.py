@@ -185,7 +185,7 @@ DATA_MUTABLE_KEYS = {
     CONF_ADDRESS_MIN_INTERVAL_MIN,
     CONF_GEOCODE_PROVIDER,
     CONF_GEOCODE_CONTACT,
-    CONF_ADDRESS_FIELDS,  # NEW: allow changing which address parts to expose
-    # you may add combine unit/suffix here if you decide to store them in data
+    CONF_ADDRESS_FIELDS,  # allow changing which address parts to expose
+    # (add combine unit/suffix here if you decide to store them in data too)
     # CONF_COMBINE_UNIT_MODE, CONF_COMBINE_SUFFIX,
 }

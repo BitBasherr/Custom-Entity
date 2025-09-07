@@ -68,7 +68,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         data = dict(entry.data or {})
         options = dict(entry.options or {})
 
-        # ---- v1 -> v2 (your previous migration): move combine & extras into options
+        # ---- v1 -> v2: move combine & extras into options
         if version < 2:
             for k in (
                 CONF_BATTERY_ENTITY,
@@ -90,7 +90,6 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # ---- v2 -> v3: add default address fields if missing (no behavior change otherwise)
         if version < 3:
-            # We only set a default if the key is absent to avoid clobbering user choices.
             if CONF_ADDRESS_FIELDS not in data:
                 data[CONF_ADDRESS_FIELDS] = list(DEFAULT_ADDRESS_FIELDS)
 

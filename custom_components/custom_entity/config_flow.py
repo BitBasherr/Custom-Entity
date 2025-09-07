@@ -202,7 +202,6 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return await self.async_step_combine()
 
         attrs = []
-        src_id = self._data.get(CONF_SOURCE_ENTITY) or "source entity"
         st = self.hass.states.get(self._data.get(CONF_SOURCE_ENTITY))
         if st:
             attrs = list(st.attributes.keys())
