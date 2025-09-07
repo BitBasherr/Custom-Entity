@@ -1,4 +1,4 @@
-"""Custom Sensor entity with Mirror mode, Person Label mode, optional Auto-address + combine conversion/suffix, and label mode."""
+"""Custom Sensor entity with Mirror mode, Person Label mode, and optional Auto-address + combine conversion/suffix."""
 from __future__ import annotations
 
 import asyncio
@@ -29,7 +29,6 @@ from .const import (
     CONF_PERSON_ENTITY,
     CONF_LABEL_ATTR,
     DEFAULT_LABEL_ATTR,
-    CONF_LABEL_MODE,
     # auto address + fields
     CONF_AUTO_ADDRESS,
     CONF_ADDRESS_MIN_MOVE_MI,
@@ -67,8 +66,7 @@ def _float_from_state(s) -> Optional[float]:
     try:
         return float(s)
     except Exception:
-        import re as _re
-        m = _re.search(r"-?\d+(?:\.\d+)?", str(s))
+        m = re.search(r"-?\d+(?:\.\d+)?", str(s))
         if m:
             try:
                 return float(m.group(0))
@@ -123,7 +121,6 @@ class CustomSensorEntity(SensorEntity):
         self._source_entity = d.get(CONF_SOURCE_ENTITY) or None
         self._person_entity = d.get(CONF_PERSON_ENTITY) or None
         self._label_attr = d.get(CONF_LABEL_ATTR, DEFAULT_LABEL_ATTR) or DEFAULT_LABEL_ATTR
-        self._label_mode = d.get(CONF_LABEL_MODE, "line1")
 
         self._device_class = d.get(CONF_DEVICE_CLASS)
         self._inherit_attrs = d.get(CONF_INHERIT_ATTRS, [])
@@ -150,6 +147,7 @@ class CustomSensorEntity(SensorEntity):
         self._geocode_provider = d.get(CONF_GEOCODE_PROVIDER, "nominatim")
         self._geocode_contact = d.get(CONF_GEOCODE_CONTACT)
 
+        # which address fields to expose if present (non-sticky)
         self._addr_fields_list: list[str] = d.get(CONF_ADDRESS_FIELDS, DEFAULT_ADDRESS_FIELDS)
         if not isinstance(self._addr_fields_list, list):
             self._addr_fields_list = list(DEFAULT_ADDRESS_FIELDS)
@@ -157,8 +155,11 @@ class CustomSensorEntity(SensorEntity):
 
         self._state: Optional[str] = None
         self._extra_attrs: dict = {}
+
+        # address cache (structured)
         self._address_cache: Optional[Dict[str, Any]] = None
 
+        # throttling state
         self._last_lookup_ts = 0.0
         self._last_lookup_lat = None
         self._last_lookup_lon = None
@@ -177,16 +178,8 @@ class CustomSensorEntity(SensorEntity):
         self._update()
         self.async_write_ha_state()
 
-    def _choose_primary_label(self, info: Dict[str, Any]) -> Optional[str]:
-        mode = (self._label_mode or "line1").lower()
-        line1 = info.get("line1") or info.get("display_name")
-        if mode == "smart":
-            return info.get("smart_place_label") or line1
-        if mode == "place_name":
-            return info.get("place_name") or line1
-        return line1
-
     def _apply_address_to_attrs(self, info: Dict[str, Any]) -> Optional[str]:
+        """Write structured address into attributes (non-sticky) and return line1."""
         if not isinstance(info, dict):
             return None
 
@@ -195,9 +188,9 @@ class CustomSensorEntity(SensorEntity):
             if k in to_clean:
                 self._extra_attrs.pop(k, None)
 
-        chosen = self._choose_primary_label(info)
-        if chosen:
-            self._extra_attrs[self._label_attr] = chosen
+        line1 = info.get("line1") or info.get("display_name")
+        if line1:
+            self._extra_attrs[self._label_attr] = line1
 
         for key in ADDRESS_FIELD_KEYS:
             if key in self._addr_fields_set:
@@ -205,7 +198,7 @@ class CustomSensorEntity(SensorEntity):
                 if val is not None and val != "":
                     self._extra_attrs[key] = val
 
-        return chosen
+        return line1
 
     def _update(self):
         self._extra_attrs = {}
@@ -237,9 +230,9 @@ class CustomSensorEntity(SensorEntity):
                     asyncio.create_task(self._maybe_reverse_geocode(lat, lon))
 
             if self._address_cache:
-                chosen = self._apply_address_to_attrs(self._address_cache)
-                if chosen and not label_val:
-                    label_val = chosen
+                line1 = self._apply_address_to_attrs(self._address_cache)
+                if line1 and not label_val:
+                    label_val = line1
 
             self._state = "" if label_val in (None, "") else str(label_val)
         else:
@@ -274,6 +267,7 @@ class CustomSensorEntity(SensorEntity):
                         self._extra_attrs[self._combine_attr_name or "combine"] = str(co.state)
 
     def _best_latlon(self):
+        """Prefer person lat/lon, fallback to tracker."""
         for ent_id in (self._person_entity, self._source_entity):
             st = self.hass.states.get(ent_id) if ent_id else None
             if not st:
@@ -298,7 +292,11 @@ class CustomSensorEntity(SensorEntity):
 
         info = None
         if self._geocode_provider == "nominatim":
-            info = await async_reverse_geocode(self.hass, lat, lon, contact=self._geocode_contact)
+            # City in parking label is controlled by Address fields: include only if 'city' is selected.
+            include_city = "city" in self._addr_fields_set
+            info = await async_reverse_geocode(
+                self.hass, lat, lon, contact=self._geocode_contact, include_city_in_parking=include_city
+            )
 
         if info:
             self._address_cache = info
@@ -306,9 +304,9 @@ class CustomSensorEntity(SensorEntity):
             self._last_lookup_lat = lat
             self._last_lookup_lon = lon
 
-            chosen = self._apply_address_to_attrs(info)
-            if self._mode == SENSOR_MODE_PERSON_LABEL and chosen:
-                self._state = str(chosen)
+            line1 = self._apply_address_to_attrs(info)
+            if self._mode == SENSOR_MODE_PERSON_LABEL and line1:
+                self._state = str(line1)
 
             self.async_write_ha_state()
 
