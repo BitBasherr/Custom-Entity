@@ -35,8 +35,8 @@ from .const import (
     DEFAULT_GEOCODE_PROVIDER,
     # address fields
     CONF_ADDRESS_FIELDS,
-    DEFAULT_ADDRESS_FIELDS,
     SELECT_ADDRESS_FIELDS,
+    ADDRESS_FIELD_OPTIONS,
     # selectors
     SELECT_ANY_ENTITY,
     SELECT_PERSON,
@@ -44,7 +44,7 @@ from .const import (
     SELECT_MILES_SLIDER,
     SELECT_MINUTES_SLIDER,
     SELECT_PRECISION,
-    # combine (saved in options, but we let users set at create-time)
+    # combine (captured in data here; options flow can refine later)
     CONF_COMBINE,
     CONF_COMBINE_ENTITY,
     CONF_COMBINE_ATTR_NAME,
@@ -70,6 +70,24 @@ def _guess_device_class(hass, entity_id: str) -> str | None:
     if isinstance(dc, str) and dc:
         return dc
     return None
+
+
+# ---------- Address fields helpers ----------
+_ALLOWED_ADDR_VALUES = tuple(opt["value"] for opt in ADDRESS_FIELD_OPTIONS)
+
+def _sanitize_address_list(value) -> list[str]:
+    """Ensure list contains only allowed address field tokens; default to ALL if empty/invalid."""
+    if isinstance(value, (tuple, set)):
+        value = list(value)
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        value = []
+    cleaned = [v for v in value if v in _ALLOWED_ADDR_VALUES]
+    if not cleaned:
+        # Default to ALL available fields as requested
+        cleaned = list(_ALLOWED_ADDR_VALUES)
+    return cleaned
 
 
 class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -148,11 +166,13 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if contact is not None:
                 self._data[CONF_GEOCODE_CONTACT] = str(contact)
 
-            # Address fields selection (default to full DEFAULT_ADDRESS_FIELDS)
-            fields = user_input.get(CONF_ADDRESS_FIELDS, DEFAULT_ADDRESS_FIELDS)
-            self._data[CONF_ADDRESS_FIELDS] = list(fields) if isinstance(fields, list) else list(DEFAULT_ADDRESS_FIELDS)
+            fields = _sanitize_address_list(user_input.get(CONF_ADDRESS_FIELDS))
+            self._data[CONF_ADDRESS_FIELDS] = fields
 
             return await self.async_step_inherit_attrs()
+
+        # Defaults for the control (sanitize any existing data)
+        default_fields = _sanitize_address_list(self._data.get(CONF_ADDRESS_FIELDS))
 
         schema = vol.Schema({
             vol.Optional("tracker_entity", default=self._data.get(CONF_SOURCE_ENTITY, "")): SELECT_DEVICE_TRACKER,
@@ -164,7 +184,7 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "select": {"options": [{"label": "OSM Nominatim (free)", "value": "nominatim"}], "mode": "list"}
             }),
             vol.Optional(CONF_GEOCODE_CONTACT): str,
-            vol.Optional(CONF_ADDRESS_FIELDS, default=DEFAULT_ADDRESS_FIELDS): SELECT_ADDRESS_FIELDS,
+            vol.Optional(CONF_ADDRESS_FIELDS, default=default_fields): SELECT_ADDRESS_FIELDS,
         })
         return self.async_show_form(step_id="tracker_details", data_schema=schema)
 
@@ -183,10 +203,12 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if contact:
                 self._data[CONF_GEOCODE_CONTACT] = str(contact)
 
-            fields = user_input.get(CONF_ADDRESS_FIELDS, DEFAULT_ADDRESS_FIELDS)
-            self._data[CONF_ADDRESS_FIELDS] = list(fields) if isinstance(fields, list) else list(DEFAULT_ADDRESS_FIELDS)
+            fields = _sanitize_address_list(user_input.get(CONF_ADDRESS_FIELDS))
+            self._data[CONF_ADDRESS_FIELDS] = fields
 
             return await self.async_step_inherit_attrs()
+
+        default_fields = _sanitize_address_list(self._data.get(CONF_ADDRESS_FIELDS))
 
         schema = vol.Schema({
             vol.Required(CONF_PERSON_ENTITY): SELECT_PERSON,
@@ -200,7 +222,7 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "select": {"options": [{"label": "OSM Nominatim (free)", "value": "nominatim"}], "mode": "list"}
             }),
             vol.Optional(CONF_GEOCODE_CONTACT): str,
-            vol.Optional(CONF_ADDRESS_FIELDS, default=DEFAULT_ADDRESS_FIELDS): SELECT_ADDRESS_FIELDS,
+            vol.Optional(CONF_ADDRESS_FIELDS, default=default_fields): SELECT_ADDRESS_FIELDS,
         })
         return self.async_show_form(step_id="person_label_details", data_schema=schema)
 
@@ -228,7 +250,7 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_combine(self, user_input=None):
-        """Initial combine configuration (stored in options at save)."""
+        """Initial combine configuration (stored in data, options flow can refine later)."""
         if user_input is not None:
             combine_on = bool(user_input.get(CONF_COMBINE, False))
             self._data[CONF_COMBINE] = combine_on

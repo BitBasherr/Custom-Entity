@@ -37,8 +37,8 @@ from .const import (
     DEFAULT_GEOCODE_PROVIDER,
     # address fields (data)
     CONF_ADDRESS_FIELDS,
-    DEFAULT_ADDRESS_FIELDS,
     SELECT_ADDRESS_FIELDS,
+    ADDRESS_FIELD_OPTIONS,
     # options (entry.options)
     CONF_ATTRIBUTE_SENSORS,
     CONF_BATTERY_ENTITY,
@@ -77,6 +77,23 @@ def _guess_device_class(hass, entity_id: str) -> str | None:
     if isinstance(dc, str) and dc:
         return dc
     return None
+
+
+# ---------- Address fields helpers ----------
+_ALLOWED_ADDR_VALUES = tuple(opt["value"] for opt in ADDRESS_FIELD_OPTIONS)
+
+def _sanitize_address_list(value) -> list[str]:
+    """Ensure list contains only allowed address field tokens; default to ALL if empty/invalid."""
+    if isinstance(value, (tuple, set)):
+        value = list(value)
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        value = []
+    cleaned = [v for v in value if v in _ALLOWED_ADDR_VALUES]
+    if not cleaned:
+        cleaned = list(_ALLOWED_ADDR_VALUES)  # default to ALL
+    return cleaned
 
 
 class CustomEntityOptionsFlow(config_entries.OptionsFlow):
@@ -139,13 +156,13 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         person_now = data_now.get(CONF_PERSON_ENTITY, "")
         label_attr_now = data_now.get(CONF_LABEL_ATTR, DEFAULT_LABEL_ATTR)
 
-        # Auto-address fields (for tracker OR person_label sensor)
+        # Reverse geocode toggles (for tracker OR person_label sensor)
         auto_now = bool(data_now.get(CONF_AUTO_ADDRESS, True))
         min_move_now = float(data_now.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
         min_interval_now = int(data_now.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
         provider_now = data_now.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER)
         contact_now = data_now.get(CONF_GEOCODE_CONTACT, "")
-        addr_fields_now = data_now.get(CONF_ADDRESS_FIELDS, DEFAULT_ADDRESS_FIELDS)
+        addr_fields_now = _sanitize_address_list(data_now.get(CONF_ADDRESS_FIELDS))
 
         has_dc = platform_now in PLATFORMS_WITH_DEVICE_CLASS
 
@@ -230,8 +247,10 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 if user_input.get(CONF_GEOCODE_CONTACT) is not None:
                     staged[CONF_GEOCODE_CONTACT] = str(user_input.get(CONF_GEOCODE_CONTACT) or "")
                 if user_input.get(CONF_ADDRESS_FIELDS) is not None:
-                    fl = user_input.get(CONF_ADDRESS_FIELDS, DEFAULT_ADDRESS_FIELDS)
-                    staged[CONF_ADDRESS_FIELDS] = list(fl) if isinstance(fl, list) else list(DEFAULT_ADDRESS_FIELDS)
+                    staged[CONF_ADDRESS_FIELDS] = _sanitize_address_list(user_input.get(CONF_ADDRESS_FIELDS))
+                else:
+                    # Ensure stored data stays valid
+                    staged[CONF_ADDRESS_FIELDS] = _sanitize_address_list(addr_fields_now)
 
             # Stage only allowed keys into pending data
             for k, v in staged.items():
@@ -386,6 +405,9 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
     async def _finish(self):
         """Write any pending data mutations (Options → Data bridge) and save options."""
         if self._pending_data:
+            # Always sanitize address fields before applying
+            if CONF_ADDRESS_FIELDS in self._pending_data:
+                self._pending_data[CONF_ADDRESS_FIELDS] = _sanitize_address_list(self._pending_data.get(CONF_ADDRESS_FIELDS))
             clean_data = {k: self._pending_data[k] for k in self._pending_data if k in DATA_MUTABLE_KEYS}
             if clean_data:
                 # Stash into options so __on_update listener in __init__ can apply then reload.
