@@ -1,4 +1,5 @@
-"""Custom Sensor entity with Mirror mode, Person Label mode, and optional Auto-address + combine conversion/suffix."""
+"""Custom Sensor entity with Mirror mode, Person Label mode, and optional Auto-address + combine conversion/suffix.
+Now includes a sticky 'place_name' attribute for automation-safe use."""
 from __future__ import annotations
 
 import asyncio
@@ -89,25 +90,19 @@ def _unit_hint(state_str: str, attrs: dict) -> Optional[str]:
     return None
 
 
-def _convert_to_minutes(val: float, mode: str, unit_hint: Optional[str]) -> tuple[float, bool, str]:
-    """
-    Convert based on mode and/or unit hint.
-    Returns (value, converted?, eta_unit) where eta_unit is 'min' if minutes, else '' or source hint.
-    """
+def _convert_to_minutes(val: float, mode: str, unit_hint: Optional[str]) -> tuple[float, bool]:
     mode = (mode or "auto").lower()
     if mode == "sec_to_min":
-        return (val / 60.0, True, "min")
+        return (val / 60.0, True)
     if mode == "hr_to_min":
-        return (val * 60.0, True, "min")
+        return (val * 60.0, True)
     if mode == "none":
-        return (val, False, unit_hint or "")
+        return (val, False)
     if unit_hint in ("s", "sec", "second", "seconds"):
-        return (val / 60.0, True, "min")
+        return (val / 60.0, True)
     if unit_hint in ("h", "hr", "hrs", "hour", "hours"):
-        return (val * 60.0, True, "min")
-    if unit_hint in ("m", "min", "mins", "minute", "minutes"):
-        return (val, False, "min")
-    return (val, False, "")
+        return (val * 60.0, True)
+    return (val, False)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
@@ -170,6 +165,9 @@ class CustomSensorEntity(SensorEntity):
         self._last_lookup_lat = None
         self._last_lookup_lon = None
 
+        # sticky place_name cache (automation-safe)
+        self._last_place_name: Optional[str] = None
+
     async def async_added_to_hass(self):
         self._update()
         track = self.hass.helpers.event.async_track_state_change_event
@@ -205,6 +203,19 @@ class CustomSensorEntity(SensorEntity):
                 if val is not None and val != "":
                     self._extra_attrs[key] = val
 
+        # --- sticky place_name (automation-safe) ---
+        place_name_now = (
+            info.get("poi_name")
+            or info.get("house_name")
+            or info.get("place_label")
+            or info.get("line1")
+        )
+        if place_name_now:
+            self._last_place_name = str(place_name_now)
+
+        # always expose, even if empty
+        self._extra_attrs["place_name"] = self._last_place_name or ""
+
         return line1
 
     def _update(self):
@@ -214,9 +225,7 @@ class CustomSensorEntity(SensorEntity):
         if self._source_entity:
             src = self.hass.states.get(self._source_entity)
             if src and isinstance(src.attributes, dict):
-                reserved = {self._label_attr, *ADDRESS_FIELD_KEYS, "full_address",
-                            "eta_minutes", "eta_label", "eta_source_entity",
-                            "eta_source_name", "eta_unit", "eta_raw", "eta_converted"}
+                reserved = {self._label_attr, *ADDRESS_FIELD_KEYS, "full_address", "place_name"}
                 for k in self._inherit_attrs:
                     if k in src.attributes and k not in reserved:
                         self._extra_attrs[k] = src.attributes[k]
@@ -257,39 +266,24 @@ class CustomSensorEntity(SensorEntity):
             if self._address_cache:
                 self._apply_address_to_attrs(self._address_cache)
 
-        # Combine behavior + ETA metadata
+        # Combine behavior
         if self._combine and self._combine_entity:
             co = self.hass.states.get(self._combine_entity)
             if co:
-                # Always publish metadata about where ETA came from
-                self._extra_attrs["eta_source_entity"] = self._combine_entity
-                self._extra_attrs["eta_source_name"] = co.attributes.get("friendly_name") or self._combine_entity
-                self._extra_attrs["eta_raw"] = co.state
-
                 num = _float_from_state(co.state)
                 if num is not None:
-                    minutes, applied, eta_unit = _convert_to_minutes(num, self._unit_mode, _unit_hint(co.state, co.attributes or {}))
+                    minutes, applied = _convert_to_minutes(num, self._unit_mode, _unit_hint(co.state, co.attributes or {}))
                     if self._hyphenate:
-                        txt = _fmt_number(minutes if (applied or eta_unit == "min") else num, self._label_prec)
+                        txt = _fmt_number(minutes if applied else num, self._label_prec)
                         use_suffix = self._suffix
-                        if not use_suffix and (applied or eta_unit == "min" or self._unit_mode in ("sec_to_min", "hr_to_min")):
+                        if not use_suffix and (applied or self._unit_mode in ("sec_to_min", "hr_to_min")):
                             use_suffix = " min"
                         base = "" if self._state in (None, "unknown", "unavailable") else str(self._state)
                         combined = f"{txt}{use_suffix}" if use_suffix else txt
                         self._state = f"{base} - {combined}" if base else combined
                     else:
-                        val = minutes if (applied or eta_unit == "min") else num
+                        val = minutes if applied else num
                         self._extra_attrs[self._combine_attr_name or "combine"] = _fmt_number(val, self._attr_prec)
-
-                    # helpers (numeric + label + metadata)
-                    val_txt = _fmt_number(minutes if (applied or eta_unit == "min") else num, self._attr_prec)
-                    try:
-                        self._extra_attrs["eta_minutes"] = float(val_txt)
-                    except Exception:
-                        self._extra_attrs["eta_minutes"] = val_txt
-                    self._extra_attrs["eta_label"] = f"{val_txt} min" if (applied or eta_unit == "min") else val_txt
-                    self._extra_attrs["eta_converted"] = bool(applied or eta_unit == "min")
-                    self._extra_attrs["eta_unit"] = "min" if (applied or eta_unit == "min") else (eta_unit or "")
                 else:
                     if self._hyphenate:
                         base = "" if self._state in (None, "unknown", "unavailable") else str(self._state)
@@ -297,10 +291,9 @@ class CustomSensorEntity(SensorEntity):
                     else:
                         self._extra_attrs[self._combine_attr_name or "combine"] = str(co.state)
 
-                    self._extra_attrs["eta_minutes"] = None
-                    self._extra_attrs["eta_label"] = str(co.state)
-                    self._extra_attrs["eta_converted"] = False
-                    self._extra_attrs["eta_unit"] = ""
+        # ensure sticky place_name exists even if we didn’t touch address this tick
+        if "place_name" not in self._extra_attrs:
+            self._extra_attrs["place_name"] = self._last_place_name or ""
 
     def _best_latlon(self):
         """Prefer person lat/lon, fallback to tracker."""

@@ -200,3 +200,4 @@ DATA_MUTABLE_KEYS = {
     # you may add combine unit/suffix here if you decide to store them in data
     # CONF_COMBINE_UNIT_MODE, CONF_COMBINE_SUFFIX,
 }
+PLACE_NAME_KEY = "place_name"  # sticky convenience label for automations
