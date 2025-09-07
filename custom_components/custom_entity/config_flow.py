@@ -101,7 +101,9 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             platform = str(user_input[CONF_PLATFORM])
             friendly = str(user_input[CONF_FRIENDLY_NAME])
             source = str(user_input.get(CONF_SOURCE_ENTITY) or "")
-            presence = str(user_input.get(CONF_PRESENCE_HELPER)) if user_input.get(CONF_PRESENCE_HELPER) else None
+            presence = (
+                str(user_input.get(CONF_PRESENCE_HELPER)) if user_input.get(CONF_PRESENCE_HELPER) else None
+            )
             sensor_mode = user_input.get(CONF_SENSOR_MODE, SENSOR_MODE_MIRROR)
             person = user_input.get(CONF_PERSON_ENTITY)
 
@@ -139,17 +141,20 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Base entry form
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({
-                vol.Required(CONF_PLATFORM): selector({"select": {
-                    "options": SUPPORTED_PLATFORMS, "mode": "dropdown"}}),
-                vol.Required(CONF_FRIENDLY_NAME): str,
-                vol.Optional(CONF_SOURCE_ENTITY): SELECT_ANY_ENTITY,
-                vol.Optional(CONF_PERSON_ENTITY): SELECT_PERSON,
-                vol.Optional(CONF_PRESENCE_HELPER): SELECT_ANY_ENTITY,
-                vol.Optional(CONF_SENSOR_MODE, default=SENSOR_MODE_MIRROR): selector({
-                    "select": {"options": SENSOR_MODE_OPTIONS, "mode": "list"}
-                }),
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_PLATFORM): selector(
+                        {"select": {"options": SUPPORTED_PLATFORMS, "mode": "dropdown"}}
+                    ),
+                    vol.Required(CONF_FRIENDLY_NAME): str,
+                    vol.Optional(CONF_SOURCE_ENTITY): SELECT_ANY_ENTITY,
+                    vol.Optional(CONF_PERSON_ENTITY): SELECT_PERSON,
+                    vol.Optional(CONF_PRESENCE_HELPER): SELECT_ANY_ENTITY,
+                    vol.Optional(CONF_SENSOR_MODE, default=SENSOR_MODE_MIRROR): selector(
+                        {"select": {"options": SENSOR_MODE_OPTIONS, "mode": "list"}}
+                    ),
+                }
+            ),
         )
 
     async def async_step_tracker_details(self, user_input=None):
@@ -160,9 +165,15 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             self._data[CONF_LABEL_ATTR] = str(user_input.get(CONF_LABEL_ATTR) or DEFAULT_LABEL_ATTR).strip()
             self._data[CONF_AUTO_ADDRESS] = bool(user_input.get(CONF_AUTO_ADDRESS, True))
-            self._data[CONF_ADDRESS_MIN_MOVE_MI] = float(user_input.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
-            self._data[CONF_ADDRESS_MIN_INTERVAL_MIN] = int(user_input.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
-            self._data[CONF_GEOCODE_PROVIDER] = str(user_input.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER))
+            self._data[CONF_ADDRESS_MIN_MOVE_MI] = float(
+                user_input.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI)
+            )
+            self._data[CONF_ADDRESS_MIN_INTERVAL_MIN] = int(
+                user_input.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN)
+            )
+            self._data[CONF_GEOCODE_PROVIDER] = str(
+                user_input.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER)
+            )
             contact = user_input.get(CONF_GEOCODE_CONTACT)
             if contact is not None:
                 self._data[CONF_GEOCODE_CONTACT] = str(contact)
@@ -175,31 +186,41 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         # Defaults for the control (sanitize any existing data)
         default_fields = _sanitize_address_list(self._data.get(CONF_ADDRESS_FIELDS))
 
-        schema = vol.Schema({
-            vol.Optional("tracker_entity", default=self._data.get(CONF_SOURCE_ENTITY, "")): SELECT_DEVICE_TRACKER,
-            vol.Optional(CONF_LABEL_ATTR, default=DEFAULT_LABEL_ATTR): str,
-            vol.Optional(CONF_AUTO_ADDRESS, default=True): bool,
-            vol.Optional(CONF_ADDRESS_MIN_MOVE_MI, default=DEFAULT_ADDRESS_MIN_MOVE_MI): SELECT_MILES_SLIDER,
-            vol.Optional(CONF_ADDRESS_MIN_INTERVAL_MIN, default=DEFAULT_ADDRESS_MIN_INTERVAL_MIN): SELECT_MINUTES_SLIDER,
-            vol.Optional(CONF_GEOCODE_PROVIDER, default=DEFAULT_GEOCODE_PROVIDER): selector({
-                "select": {"options": [{"label": "OSM Nominatim (free)", "value": "nominatim"}], "mode": "list"}
-            }),
-            vol.Optional(CONF_GEOCODE_CONTACT): str,
-            vol.Optional(CONF_ADDRESS_FIELDS, default=default_fields): SELECT_ADDRESS_FIELDS,
-        })
+        schema = vol.Schema(
+            {
+                vol.Optional("tracker_entity", default=self._data.get(CONF_SOURCE_ENTITY, "")): SELECT_DEVICE_TRACKER,
+                vol.Optional(CONF_LABEL_ATTR, default=DEFAULT_LABEL_ATTR): str,
+                vol.Optional(CONF_AUTO_ADDRESS, default=True): bool,
+                vol.Optional(CONF_ADDRESS_MIN_MOVE_MI, default=DEFAULT_ADDRESS_MIN_MOVE_MI): SELECT_MILES_SLIDER,
+                vol.Optional(CONF_ADDRESS_MIN_INTERVAL_MIN, default=DEFAULT_ADDRESS_MIN_INTERVAL_MIN): SELECT_MINUTES_SLIDER,
+                vol.Optional(CONF_GEOCODE_PROVIDER, default=DEFAULT_GEOCODE_PROVIDER): selector(
+                    {"select": {"options": [{"label": "OSM Nominatim (free)", "value": "nominatim"}], "mode": "list"}}
+                ),
+                vol.Optional(CONF_GEOCODE_CONTACT): str,
+                vol.Optional(CONF_ADDRESS_FIELDS, default=default_fields): SELECT_ADDRESS_FIELDS,
+            }
+        )
         return self.async_show_form(step_id="tracker_details", data_schema=schema)
 
     async def async_step_person_label_details(self, user_input=None):
         """sensor-only when sensor_mode=person_label: person+tracker+address fields."""
         if user_input is not None:
             self._data[CONF_PERSON_ENTITY] = str(user_input[CONF_PERSON_ENTITY])
-            self._data[CONF_SOURCE_ENTITY] = str(user_input.get(CONF_SOURCE_ENTITY) or user_input.get("tracker_entity") or "")
+            self._data[CONF_SOURCE_ENTITY] = str(
+                user_input.get(CONF_SOURCE_ENTITY) or user_input.get("tracker_entity") or ""
+            )
             self._data[CONF_LABEL_ATTR] = str(user_input.get(CONF_LABEL_ATTR) or DEFAULT_LABEL_ATTR).strip()
 
             self._data[CONF_AUTO_ADDRESS] = bool(user_input.get(CONF_AUTO_ADDRESS, True))
-            self._data[CONF_ADDRESS_MIN_MOVE_MI] = float(user_input.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
-            self._data[CONF_ADDRESS_MIN_INTERVAL_MIN] = int(user_input.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
-            self._data[CONF_GEOCODE_PROVIDER] = str(user_input.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER))
+            self._data[CONF_ADDRESS_MIN_MOVE_MI] = float(
+                user_input.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI)
+            )
+            self._data[CONF_ADDRESS_MIN_INTERVAL_MIN] = int(
+                user_input.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN)
+            )
+            self._data[CONF_GEOCODE_PROVIDER] = str(
+                user_input.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER)
+            )
             contact = user_input.get(CONF_GEOCODE_CONTACT)
             if contact:
                 self._data[CONF_GEOCODE_CONTACT] = str(contact)
@@ -211,20 +232,22 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         default_fields = _sanitize_address_list(self._data.get(CONF_ADDRESS_FIELDS))
 
-        schema = vol.Schema({
-            vol.Required(CONF_PERSON_ENTITY): SELECT_PERSON,
-            vol.Optional("tracker_entity", default=self._data.get(CONF_SOURCE_ENTITY, "")): SELECT_DEVICE_TRACKER,
-            vol.Optional(CONF_SOURCE_ENTITY, default=self._data.get(CONF_SOURCE_ENTITY, "")): SELECT_ANY_ENTITY,
-            vol.Optional(CONF_LABEL_ATTR, default=DEFAULT_LABEL_ATTR): str,
-            vol.Optional(CONF_AUTO_ADDRESS, default=True): bool,
-            vol.Optional(CONF_ADDRESS_MIN_MOVE_MI, default=DEFAULT_ADDRESS_MIN_MOVE_MI): SELECT_MILES_SLIDER,
-            vol.Optional(CONF_ADDRESS_MIN_INTERVAL_MIN, default=DEFAULT_ADDRESS_MIN_INTERVAL_MIN): SELECT_MINUTES_SLIDER,
-            vol.Optional(CONF_GEOCODE_PROVIDER, default=DEFAULT_GEOCODE_PROVIDER): selector({
-                "select": {"options": [{"label": "OSM Nominatim (free)", "value": "nominatim"}], "mode": "list"}
-            }),
-            vol.Optional(CONF_GEOCODE_CONTACT): str,
-            vol.Optional(CONF_ADDRESS_FIELDS, default=default_fields): SELECT_ADDRESS_FIELDS,
-        })
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_PERSON_ENTITY): SELECT_PERSON,
+                vol.Optional("tracker_entity", default=self._data.get(CONF_SOURCE_ENTITY, "")): SELECT_DEVICE_TRACKER,
+                vol.Optional(CONF_SOURCE_ENTITY, default=self._data.get(CONF_SOURCE_ENTITY, "")): SELECT_ANY_ENTITY,
+                vol.Optional(CONF_LABEL_ATTR, default=DEFAULT_LABEL_ATTR): str,
+                vol.Optional(CONF_AUTO_ADDRESS, default=True): bool,
+                vol.Optional(CONF_ADDRESS_MIN_MOVE_MI, default=DEFAULT_ADDRESS_MIN_MOVE_MI): SELECT_MILES_SLIDER,
+                vol.Optional(CONF_ADDRESS_MIN_INTERVAL_MIN, default=DEFAULT_ADDRESS_MIN_INTERVAL_MIN): SELECT_MINUTES_SLIDER,
+                vol.Optional(CONF_GEOCODE_PROVIDER, default=DEFAULT_GEOCODE_PROVIDER): selector(
+                    {"select": {"options": [{"label": "OSM Nominatim (free)", "value": "nominatim"}], "mode": "list"}}
+                ),
+                vol.Optional(CONF_GEOCODE_CONTACT): str,
+                vol.Optional(CONF_ADDRESS_FIELDS, default=default_fields): SELECT_ADDRESS_FIELDS,
+            }
+        )
         return self.async_show_form(step_id="person_label_details", data_schema=schema)
 
     async def async_step_inherit_attrs(self, user_input=None):
@@ -243,11 +266,13 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="inherit_attrs",
-            data_schema=vol.Schema({
-                vol.Optional(CONF_INHERIT_ATTRS): selector({
-                    "select": {"options": attrs, "multiple": True, "mode": "dropdown"}
-                })
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_INHERIT_ATTRS): selector(
+                        {"select": {"options": attrs, "multiple": True, "mode": "dropdown"}}
+                    )
+                }
+            ),
         )
 
     async def async_step_combine(self, user_input=None):
@@ -259,8 +284,12 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._data[CONF_COMBINE_ENTITY] = str(user_input.get(CONF_COMBINE_ENTITY, ""))
                 self._data[CONF_COMBINE_ATTR_NAME] = str(user_input.get(CONF_COMBINE_ATTR_NAME) or "combine")
                 self._data[CONF_HYPHENATE_STATE] = bool(user_input.get(CONF_HYPHENATE_STATE, True))
-                self._data[CONF_COMBINE_LABEL_PRECISION] = int(str(user_input.get(CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION)))
-                self._data[CONF_COMBINE_ATTR_PRECISION] = int(str(user_input.get(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION)))
+                self._data[CONF_COMBINE_LABEL_PRECISION] = int(
+                    str(user_input.get(CONF_COMBINE_LABEL_PRECISION, DEFAULT_COMBINE_PRECISION))
+                )
+                self._data[CONF_COMBINE_ATTR_PRECISION] = int(
+                    str(user_input.get(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION))
+                )
 
             # If this platform supports device_class, offer it last
             if self._data[CONF_PLATFORM] in PLATFORMS_WITH_DEVICE_CLASS:
@@ -269,14 +298,16 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="combine",
-            data_schema=vol.Schema({
-                vol.Required(CONF_COMBINE, default=False): bool,
-                vol.Optional(CONF_COMBINE_ENTITY): SELECT_ANY_ENTITY,
-                vol.Optional(CONF_COMBINE_ATTR_NAME, default="combine"): str,
-                vol.Optional(CONF_HYPHENATE_STATE, default=True): bool,
-                vol.Optional(CONF_COMBINE_LABEL_PRECISION, default=str(DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
-                vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=str(DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_COMBINE, default=False): bool,
+                    vol.Optional(CONF_COMBINE_ENTITY): SELECT_ANY_ENTITY,
+                    vol.Optional(CONF_COMBINE_ATTR_NAME, default="combine"): str,
+                    vol.Optional(CONF_HYPHENATE_STATE, default=True): bool,
+                    vol.Optional(CONF_COMBINE_LABEL_PRECISION, default=str(DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
+                    vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=str(DEFAULT_COMBINE_PRECISION)): SELECT_PRECISION,
+                }
+            ),
         )
 
     async def async_step_device_class(self, user_input=None):
@@ -294,15 +325,15 @@ class CustomEntityConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         guessed = self._data.get(CONF_DEVICE_CLASS)
         if suggestions:
-            schema = vol.Schema({
-                vol.Optional(CONF_DEVICE_CLASS, default=guessed or suggestions[0]): selector({
-                    "select": {"options": suggestions, "mode": "list"}
-                })
-            })
+            schema = vol.Schema(
+                {
+                    vol.Optional(CONF_DEVICE_CLASS, default=guessed or suggestions[0]): selector(
+                        {"select": {"options": suggestions, "mode": "list"}}
+                    )
+                }
+            )
         else:
-            schema = vol.Schema({
-                vol.Optional(CONF_DEVICE_CLASS, default=guessed or ""): str
-            })
+            schema = vol.Schema({vol.Optional(CONF_DEVICE_CLASS, default=guessed or ""): str})
 
         return self.async_show_form(step_id="device_class", data_schema=schema)
 

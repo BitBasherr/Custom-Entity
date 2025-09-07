@@ -1,7 +1,9 @@
-"""Options flow (core, attrs, combine, extras, address fields; applies data changes)."""
+"""Options flow (core, geocoder, attrs, combine, extras, attribute sensors).
+Hardened to always return a FlowResult and with address-field sanitization
+(default to ALL allowed fields when empty/invalid)."""
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import voluptuous as vol
 from homeassistant import config_entries
@@ -68,17 +70,6 @@ SENSOR_MODE_OPTIONS = [
     {"label": "Person Label (sensor)", "value": SENSOR_MODE_PERSON_LABEL},
 ]
 
-
-def _guess_device_class(hass, entity_id: str) -> str | None:
-    st = hass.states.get(entity_id)
-    if not st:
-        return None
-    dc = st.attributes.get("device_class")
-    if isinstance(dc, str) and dc:
-        return dc
-    return None
-
-
 # ---------- Address fields helpers ----------
 _ALLOWED_ADDR_VALUES = tuple(opt["value"] for opt in ADDRESS_FIELD_OPTIONS)
 
@@ -97,6 +88,16 @@ def _sanitize_address_list(value) -> list[str]:
     return cleaned
 
 
+def _guess_device_class(hass, entity_id: str) -> Optional[str]:
+    st = hass.states.get(entity_id)
+    if not st:
+        return None
+    dc = st.attributes.get("device_class")
+    if isinstance(dc, str) and dc:
+        return dc
+    return None
+
+
 class CustomEntityOptionsFlow(config_entries.OptionsFlow):
     """Options flow to edit data/options and push selective data updates."""
 
@@ -105,13 +106,15 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         self._opts: Dict[str, Any] = dict(entry.options or {})
         self._opts.setdefault(CONF_ATTRIBUTE_SENSORS, {})
         self._pending_data: Dict[str, Any] = {}
-        self._pending_attr_entity: str | None = None
+        self._pending_attr_entity: Optional[str] = None
 
         # Back-compat: migrate old single precision knob to new label precision (in-memory only)
         if CONF_COMBINE_PRECISION in self._opts and CONF_COMBINE_LABEL_PRECISION not in self._opts:
             self._opts[CONF_COMBINE_LABEL_PRECISION] = self._opts.get(
                 CONF_COMBINE_PRECISION, DEFAULT_COMBINE_PRECISION
             )
+
+    # ---------------- Menu ----------------
 
     async def async_step_init(self, user_input=None):
         return await self.async_step_menu()
@@ -121,6 +124,8 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             choice = user_input.get("choice")
             if choice == "core":
                 return await self.async_step_core()
+            if choice == "geocoder":
+                return await self.async_step_geocoder()
             if choice == "attrs":
                 return await self.async_step_attrs()
             if choice == "combine":
@@ -132,20 +137,26 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             if choice == "save":
                 return await self._finish()
 
-        schema = vol.Schema({
-            vol.Required("choice"): vol.In({
-                "core":         "Core settings",
-                "attrs":        "Mirror attributes",
-                "combine":      "Combine & precision",
-                "extras":       "Extras",
-                "attr_sensors": "Attribute sensors",
-                "save":         "✅ Save & apply",
-            })
-        })
+        schema = vol.Schema(
+            {
+                vol.Required("choice"): vol.In(
+                    {
+                        "core": "Core settings",
+                        "geocoder": "Reverse Geocoder",
+                        "attrs": "Mirror attributes",
+                        "combine": "Combine & precision",
+                        "extras": "Extras",
+                        "attr_sensors": "Attribute sensors",
+                        "save": "✅ Save & apply",
+                    }
+                )
+            }
+        )
         return self.async_show_form(step_id="menu", data_schema=schema)
 
+    # ---------------- Core (platform/name/source/device_class + sensor mode) ----------------
+
     async def async_step_core(self, user_input=None):
-        """Core page: platform/name/source + sensor mode + reverse geocode + address fields."""
         data_now = dict(self.entry.data or {})
         data_now.update(self._pending_data)  # staged values take precedence
 
@@ -159,20 +170,12 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         person_now = data_now.get(CONF_PERSON_ENTITY, "")
         label_attr_now = data_now.get(CONF_LABEL_ATTR, DEFAULT_LABEL_ATTR)
 
-        # Reverse geocode toggles (for tracker OR person_label sensor)
-        auto_now = bool(data_now.get(CONF_AUTO_ADDRESS, True))
-        min_move_now = float(data_now.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
-        min_interval_now = int(data_now.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
-        provider_now = data_now.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER)
-        contact_now = data_now.get(CONF_GEOCODE_CONTACT, "")
-        addr_fields_now = _sanitize_address_list(data_now.get(CONF_ADDRESS_FIELDS))
-
         has_dc = platform_now in PLATFORMS_WITH_DEVICE_CLASS
 
         fields: Dict[Any, Any] = {
-            vol.Required(CONF_PLATFORM, default=platform_now or SUPPORTED_PLATFORMS[0]): selector({
-                "select": {"options": SUPPORTED_PLATFORMS, "mode": "dropdown"}
-            }),
+            vol.Required(CONF_PLATFORM, default=platform_now or SUPPORTED_PLATFORMS[0]): selector(
+                {"select": {"options": SUPPORTED_PLATFORMS, "mode": "dropdown"}}
+            ),
             vol.Required(CONF_FRIENDLY_NAME, default=name_now): str,
             vol.Optional(CONF_SOURCE_ENTITY, default=source_now): SELECT_ANY_ENTITY,
         }
@@ -181,33 +184,20 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             suggestions: List[str] = DEVICE_CLASSES.get(platform_now, [])
             default_dc = device_class_now or _guess_device_class(self.hass, source_now) or ""
             if suggestions:
-                fields[vol.Optional(CONF_DEVICE_CLASS, default=default_dc or suggestions[0])] = selector({
-                    "select": {"options": suggestions, "mode": "list"}
-                })
+                fields[
+                    vol.Optional(CONF_DEVICE_CLASS, default=default_dc or suggestions[0])
+                ] = selector({"select": {"options": suggestions, "mode": "list"}})
             else:
                 fields[vol.Optional(CONF_DEVICE_CLASS, default=default_dc)] = str
 
         # Sensor-only bits (mode + person label details)
         if (platform_now or "") == "sensor":
-            fields[vol.Optional(CONF_SENSOR_MODE, default=mode_now)] = selector({
-                "select": {"options": SENSOR_MODE_OPTIONS, "mode": "list"}
-            })
+            fields[vol.Optional(CONF_SENSOR_MODE, default=mode_now)] = selector(
+                {"select": {"options": SENSOR_MODE_OPTIONS, "mode": "list"}}
+            )
             if mode_now == SENSOR_MODE_PERSON_LABEL:
                 fields[vol.Required(CONF_PERSON_ENTITY, default=person_now)] = SELECT_PERSON
                 fields[vol.Optional(CONF_LABEL_ATTR, default=label_attr_now)] = str
-
-        # Reverse geocode controls (tracker ALWAYS; sensor only when person_label)
-        if (platform_now == "device_tracker") or (
-            (platform_now == "sensor") and (mode_now == SENSOR_MODE_PERSON_LABEL)
-        ):
-            fields[vol.Optional(CONF_AUTO_ADDRESS, default=auto_now)] = bool
-            fields[vol.Optional(CONF_ADDRESS_MIN_MOVE_MI, default=min_move_now)] = SELECT_MILES_SLIDER
-            fields[vol.Optional(CONF_ADDRESS_MIN_INTERVAL_MIN, default=min_interval_now)] = SELECT_MINUTES_SLIDER
-            fields[vol.Optional(CONF_GEOCODE_PROVIDER, default=provider_now)] = selector({
-                "select": {"options": [{"label": "OSM Nominatim (free)", "value": "nominatim"}], "mode": "list"}
-            })
-            fields[vol.Optional(CONF_GEOCODE_CONTACT, default=contact_now)] = str
-            fields[vol.Optional(CONF_ADDRESS_FIELDS, default=addr_fields_now)] = SELECT_ADDRESS_FIELDS
 
         schema = vol.Schema(fields)
 
@@ -241,22 +231,6 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                     if CONF_LABEL_ATTR in user_input:
                         staged[CONF_LABEL_ATTR] = str(user_input.get(CONF_LABEL_ATTR) or DEFAULT_LABEL_ATTR)
 
-            # Reverse geocode staging
-            if (staged[CONF_PLATFORM] == "device_tracker") or (
-                (staged[CONF_PLATFORM] == "sensor") and (staged.get(CONF_SENSOR_MODE, mode_now) == SENSOR_MODE_PERSON_LABEL)
-            ):
-                staged[CONF_AUTO_ADDRESS] = bool(user_input.get(CONF_AUTO_ADDRESS, auto_now))
-                staged[CONF_ADDRESS_MIN_MOVE_MI] = float(user_input.get(CONF_ADDRESS_MIN_MOVE_MI, min_move_now))
-                staged[CONF_ADDRESS_MIN_INTERVAL_MIN] = int(user_input.get(CONF_ADDRESS_MIN_INTERVAL_MIN, min_interval_now))
-                staged[CONF_GEOCODE_PROVIDER] = str(user_input.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER))
-                if user_input.get(CONF_GEOCODE_CONTACT) is not None:
-                    staged[CONF_GEOCODE_CONTACT] = str(user_input.get(CONF_GEOCODE_CONTACT) or "")
-                if user_input.get(CONF_ADDRESS_FIELDS) is not None:
-                    staged[CONF_ADDRESS_FIELDS] = _sanitize_address_list(user_input.get(CONF_ADDRESS_FIELDS))
-                else:
-                    # Ensure stored data stays valid
-                    staged[CONF_ADDRESS_FIELDS] = _sanitize_address_list(addr_fields_now)
-
             # Stage only allowed keys into pending data
             for k, v in staged.items():
                 if k in DATA_MUTABLE_KEYS:
@@ -266,10 +240,80 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(step_id="core", data_schema=schema)
 
+    # ---------------- Reverse Geocoder submenu ----------------
+
+    async def async_step_geocoder(self, user_input=None):
+        """Reverse geocode controls + address fields (tracker OR sensor+person_label)."""
+        data_now = dict(self.entry.data or {})
+        data_now.update(self._pending_data)  # staged values take precedence
+
+        platform_now = data_now.get(CONF_PLATFORM)
+        mode_now = data_now.get(CONF_SENSOR_MODE, SENSOR_MODE_MIRROR)
+
+        # Only meaningful for device_tracker OR sensor in person_label mode.
+        geocode_applicable = (platform_now == "device_tracker") or (
+            (platform_now == "sensor") and (mode_now == SENSOR_MODE_PERSON_LABEL)
+        )
+
+        auto_now = bool(data_now.get(CONF_AUTO_ADDRESS, True))
+        min_move_now = float(data_now.get(CONF_ADDRESS_MIN_MOVE_MI, DEFAULT_ADDRESS_MIN_MOVE_MI))
+        min_interval_now = int(data_now.get(CONF_ADDRESS_MIN_INTERVAL_MIN, DEFAULT_ADDRESS_MIN_INTERVAL_MIN))
+        provider_now = data_now.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER)
+        contact_now = data_now.get(CONF_GEOCODE_CONTACT, "")
+
+        # Sanitize stored address fields; default to ALL
+        addr_fields_now = _sanitize_address_list(data_now.get(CONF_ADDRESS_FIELDS))
+
+        if not geocode_applicable:
+            # Show a simple note if geocoder settings aren't relevant to the current platform/mode
+            return self.async_show_form(
+                step_id="geocoder",
+                data_schema=vol.Schema({}),
+                description_placeholders={},
+                errors={"base": "Reverse geocoding only applies to a device_tracker, or a sensor in Person Label mode."},
+            )
+
+        fields: Dict[Any, Any] = {
+            vol.Optional(CONF_AUTO_ADDRESS, default=auto_now): bool,
+            vol.Optional(CONF_ADDRESS_MIN_MOVE_MI, default=min_move_now): SELECT_MILES_SLIDER,
+            vol.Optional(CONF_ADDRESS_MIN_INTERVAL_MIN, default=min_interval_now): SELECT_MINUTES_SLIDER,
+            vol.Optional(CONF_GEOCODE_PROVIDER, default=provider_now): selector(
+                {"select": {"options": [{"label": "OSM Nominatim (free)", "value": "nominatim"}], "mode": "list"}}
+            ),
+            vol.Optional(CONF_GEOCODE_CONTACT, default=contact_now): str,
+            vol.Optional(CONF_ADDRESS_FIELDS, default=addr_fields_now): SELECT_ADDRESS_FIELDS,
+        }
+
+        schema = vol.Schema(fields)
+
+        if user_input is not None:
+            staged: Dict[str, Any] = {}
+            staged[CONF_AUTO_ADDRESS] = bool(user_input.get(CONF_AUTO_ADDRESS, auto_now))
+            staged[CONF_ADDRESS_MIN_MOVE_MI] = float(user_input.get(CONF_ADDRESS_MIN_MOVE_MI, min_move_now))
+            staged[CONF_ADDRESS_MIN_INTERVAL_MIN] = int(user_input.get(CONF_ADDRESS_MIN_INTERVAL_MIN, min_interval_now))
+            staged[CONF_GEOCODE_PROVIDER] = str(user_input.get(CONF_GEOCODE_PROVIDER, DEFAULT_GEOCODE_PROVIDER))
+            if user_input.get(CONF_GEOCODE_CONTACT) is not None:
+                staged[CONF_GEOCODE_CONTACT] = str(user_input.get(CONF_GEOCODE_CONTACT) or "")
+            if user_input.get(CONF_ADDRESS_FIELDS) is not None:
+                staged[CONF_ADDRESS_FIELDS] = _sanitize_address_list(user_input.get(CONF_ADDRESS_FIELDS))
+            else:
+                staged[CONF_ADDRESS_FIELDS] = _sanitize_address_list(addr_fields_now)
+
+            # Apply only allowed keys
+            for k, v in staged.items():
+                if k in DATA_MUTABLE_KEYS:
+                    self._pending_data[k] = v
+
+            return await self.async_step_menu()
+
+        return self.async_show_form(step_id="geocoder", data_schema=schema)
+
+    # ---------------- Mirror attributes ----------------
+
     async def async_step_attrs(self, user_input=None):
         """Mirror attributes selection."""
         source = self._pending_data.get(CONF_SOURCE_ENTITY, self.entry.data.get(CONF_SOURCE_ENTITY))
-        attrs: list[str] = []
+        attrs = []
         st = self.hass.states.get(source) if source else None
         if st and isinstance(st.attributes, dict):
             attrs = sorted([str(k) for k in st.attributes.keys()])
@@ -278,17 +322,21 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         if isinstance(current, bool):
             current = []
 
-        schema = vol.Schema({
-            vol.Optional(CONF_INHERIT_ATTRS, default=current): selector({
-                "select": {"options": attrs, "multiple": True, "mode": "list"}
-            })
-        })
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_INHERIT_ATTRS, default=current): selector(
+                    {"select": {"options": attrs, "multiple": True, "mode": "list"}}
+                )
+            }
+        )
 
         if user_input is not None:
             self._pending_data[CONF_INHERIT_ATTRS] = user_input.get(CONF_INHERIT_ATTRS, [])
             return await self.async_step_menu()
 
         return self.async_show_form(step_id="attrs", data_schema=schema)
+
+    # ---------------- Combine ----------------
 
     async def async_step_combine(self, user_input=None):
         """Combine (options)."""
@@ -304,14 +352,16 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             CONF_COMBINE_ATTR_PRECISION: str(o.get(CONF_COMBINE_ATTR_PRECISION, DEFAULT_COMBINE_PRECISION)),
         }
 
-        schema = vol.Schema({
-            vol.Required(CONF_COMBINE, default=defaults[CONF_COMBINE]): bool,
-            vol.Optional(CONF_COMBINE_ENTITY, default=defaults[CONF_COMBINE_ENTITY]): SELECT_ANY_ENTITY,
-            vol.Optional(CONF_COMBINE_ATTR_NAME, default=defaults[CONF_COMBINE_ATTR_NAME]): str,
-            vol.Optional(CONF_HYPHENATE_STATE, default=defaults[CONF_HYPHENATE_STATE]): bool,
-            vol.Optional(CONF_COMBINE_LABEL_PRECISION, default=defaults[CONF_COMBINE_LABEL_PRECISION]): SELECT_PRECISION,
-            vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=defaults[CONF_COMBINE_ATTR_PRECISION]): SELECT_PRECISION,
-        })
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_COMBINE, default=defaults[CONF_COMBINE]): bool,
+                vol.Optional(CONF_COMBINE_ENTITY, default=defaults[CONF_COMBINE_ENTITY]): SELECT_ANY_ENTITY,
+                vol.Optional(CONF_COMBINE_ATTR_NAME, default=defaults[CONF_COMBINE_ATTR_NAME]): str,
+                vol.Optional(CONF_HYPHENATE_STATE, default=defaults[CONF_HYPHENATE_STATE]): bool,
+                vol.Optional(CONF_COMBINE_LABEL_PRECISION, default=defaults[CONF_COMBINE_LABEL_PRECISION]): SELECT_PRECISION,
+                vol.Optional(CONF_COMBINE_ATTR_PRECISION, default=defaults[CONF_COMBINE_ATTR_PRECISION]): SELECT_PRECISION,
+            }
+        )
 
         if user_input is not None:
             combine_on = bool(user_input.get(CONF_COMBINE, False))
@@ -321,8 +371,12 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 new_opts[CONF_COMBINE_ENTITY] = str(user_input.get(CONF_COMBINE_ENTITY, defaults[CONF_COMBINE_ENTITY]))
                 new_opts[CONF_COMBINE_ATTR_NAME] = str(user_input.get(CONF_COMBINE_ATTR_NAME, "combine") or "combine")
                 new_opts[CONF_HYPHENATE_STATE] = bool(user_input.get(CONF_HYPHENATE_STATE, defaults[CONF_HYPHENATE_STATE]))
-                new_opts[CONF_COMBINE_LABEL_PRECISION] = str(user_input.get(CONF_COMBINE_LABEL_PRECISION, defaults[CONF_COMBINE_LABEL_PRECISION]))
-                new_opts[CONF_COMBINE_ATTR_PRECISION] = str(user_input.get(CONF_COMBINE_ATTR_PRECISION, defaults[CONF_COMBINE_ATTR_PRECISION]))
+                new_opts[CONF_COMBINE_LABEL_PRECISION] = str(
+                    user_input.get(CONF_COMBINE_LABEL_PRECISION, defaults[CONF_COMBINE_LABEL_PRECISION])
+                )
+                new_opts[CONF_COMBINE_ATTR_PRECISION] = str(
+                    user_input.get(CONF_COMBINE_ATTR_PRECISION, defaults[CONF_COMBINE_ATTR_PRECISION])
+                )
             else:
                 new_opts[CONF_COMBINE] = False
                 for k in (
@@ -339,13 +393,17 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(step_id="combine", data_schema=schema)
 
+    # ---------------- Extras ----------------
+
     async def async_step_extras(self, user_input=None):
         """Battery + presence helper."""
         o = self._opts
-        schema = vol.Schema({
-            vol.Optional(CONF_BATTERY_ENTITY, default=o.get(CONF_BATTERY_ENTITY, "")): SELECT_ANY_ENTITY,
-            vol.Optional(CONF_PRESENCE_HELPER, default=o.get(CONF_PRESENCE_HELPER, "")): SELECT_ANY_ENTITY,
-        })
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_BATTERY_ENTITY, default=o.get(CONF_BATTERY_ENTITY, "")): SELECT_ANY_ENTITY,
+                vol.Optional(CONF_PRESENCE_HELPER, default=o.get(CONF_PRESENCE_HELPER, "")): SELECT_ANY_ENTITY,
+            }
+        )
 
         if user_input is not None:
             new_opts = dict(o)
@@ -365,14 +423,9 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             self._opts = new_opts
             return await self.async_step_menu()
 
-    def _attr_buttons(self) -> Dict[str, str]:
-        return {
-            "done": "⬅ Back",
-            "add": "➕ Add attribute",
-            **{f"del__{k}": f"🗑 Remove “{k}”" for k in sorted(self._opts.get(CONF_ATTRIBUTE_SENSORS, {}))}
-        }
-
         return self.async_show_form(step_id="extras", data_schema=schema)
+
+    # ---------------- Attribute sensors sub-flow ----------------
 
     async def async_step_attr_menu(self, user_input=None):
         """Add/remove dynamic attribute sensors (friendly -> entity_id mapping)."""
@@ -386,7 +439,11 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
                 friendly = action[5:]
                 self._opts.setdefault(CONF_ATTRIBUTE_SENSORS, {}).pop(friendly, None)
 
-        buttons = self._attr_buttons()
+        buttons = {
+            "done": "⬅ Back",
+            "add": "➕ Add attribute",
+            **{f"del__{k}": f"🗑 Remove “{k}”" for k in sorted(self._opts.get(CONF_ATTRIBUTE_SENSORS, {}))}
+        }
         schema = vol.Schema({vol.Required("choice"): vol.In(buttons)})
         current = ", ".join(self._opts.get(CONF_ATTRIBUTE_SENSORS, {}).keys()) or "none"
         return self.async_show_form(
@@ -399,10 +456,7 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             self._pending_attr_entity = str(user_input["entity"])
             return await self.async_step_attr_pick_name()
-        return self.async_show_form(
-            step_id="attr_pick_entity",
-            data_schema=vol.Schema({"entity": SELECT_ANY_ENTITY})
-        )
+        return self.async_show_form(step_id="attr_pick_entity", data_schema=vol.Schema({"entity": SELECT_ANY_ENTITY}))
 
     async def async_step_attr_pick_name(self, user_input=None):
         if user_input is not None:
@@ -413,8 +467,10 @@ class CustomEntityOptionsFlow(config_entries.OptionsFlow):
             return await self.async_step_attr_menu()
         return self.async_show_form(
             step_id="attr_pick_name",
-            data_schema=vol.Schema({vol.Required("name"): selector({"text": {}})})
+            data_schema=vol.Schema({vol.Required("name"): selector({"text": {}})}),
         )
+
+    # ---------------- Finish ----------------
 
     async def _finish(self):
         """Write any pending data mutations (Options → Data bridge) and save options."""
