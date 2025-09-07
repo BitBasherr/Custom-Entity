@@ -10,6 +10,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     DOMAIN,
+    SUPPORTED_PLATFORMS,
     CONF_PLATFORM,
     # migrate keys (existing)
     CONF_BATTERY_ENTITY,
@@ -21,16 +22,18 @@ from .const import (
     CONF_PRESENCE_HELPER,
     CONF_COMBINE_PRECISION,
     CONF_COMBINE_LABEL_PRECISION,
-    # address fields (default-all)
+    # address fields
     CONF_ADDRESS_FIELDS,
     DEFAULT_ADDRESS_FIELDS,
+    ADDRESS_FIELD_KEYS,
     # options→data bridge
     OPT_APPLY_DATA_UPDATE,
     DATA_MUTABLE_KEYS,
 )
 
-CONFIG_ENTRY_VERSION = 3
+CONFIG_ENTRY_VERSION = 4  # bumped to sanitize address_fields
 
+# Map string platform names to HA Platform enums (forward/unload expects enums)
 _PLATFORM_ENUM: Dict[str, Platform] = {
     "sensor": Platform.SENSOR,
     "binary_sensor": Platform.BINARY_SENSOR,
@@ -58,12 +61,14 @@ async def async_setup(hass: HomeAssistant, _config: ConfigType) -> bool:
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate legacy entries to the latest structure without breaking IDs."""
     version = getattr(entry, "version", 1)
 
     if version < CONFIG_ENTRY_VERSION:
         data = dict(entry.data or {})
         options = dict(entry.options or {})
 
+        # ---- v1 -> v2: move combine/extras keys into options (back-compat)
         if version < 2:
             for k in (
                 CONF_BATTERY_ENTITY,
@@ -76,15 +81,23 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ):
                 if k in data and k not in options:
                     options[k] = data.pop(k)
-
             if CONF_COMBINE_PRECISION in data and CONF_COMBINE_LABEL_PRECISION not in options:
                 options[CONF_COMBINE_LABEL_PRECISION] = data.pop(CONF_COMBINE_PRECISION)
             if CONF_COMBINE_PRECISION in options and CONF_COMBINE_LABEL_PRECISION not in options:
                 options[CONF_COMBINE_LABEL_PRECISION] = options.pop(CONF_COMBINE_PRECISION)
 
+        # ---- v2 -> v3: ensure address_fields exists
         if version < 3:
             if CONF_ADDRESS_FIELDS not in data:
-                # Default ALL fields selected by default (your request)
+                data[CONF_ADDRESS_FIELDS] = list(DEFAULT_ADDRESS_FIELDS)
+
+        # ---- v3 -> v4: sanitize address_fields to allowed values; default to ALL if empty/invalid
+        if version < 4:
+            fl = data.get(CONF_ADDRESS_FIELDS)
+            if isinstance(fl, list):
+                cleaned = [k for k in fl if k in ADDRESS_FIELD_KEYS]
+                data[CONF_ADDRESS_FIELDS] = cleaned or list(DEFAULT_ADDRESS_FIELDS)
+            else:
                 data[CONF_ADDRESS_FIELDS] = list(DEFAULT_ADDRESS_FIELDS)
 
         entry.version = CONFIG_ENTRY_VERSION
@@ -94,6 +107,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up a single Custom Entity entry."""
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {"entry": entry}
 
@@ -102,9 +116,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await hass.config_entries.async_forward_entry_setups(entry, platforms)
 
     async def _on_update(hass: HomeAssistant, entry: ConfigEntry):
+        # Apply pending data changes from the options flow (marker pattern), then reload
         opts = dict(entry.options or {})
         pending = opts.get(OPT_APPLY_DATA_UPDATE)
-
         if isinstance(pending, dict) and isinstance(pending.get("data"), dict):
             new_data = dict(entry.data or {})
             for k, v in pending["data"].items():
@@ -120,6 +134,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Unload a single Custom Entity entry."""
     platforms = _enum_for_platform(entry.data.get(CONF_PLATFORM))
     unload_ok = True
     if platforms:

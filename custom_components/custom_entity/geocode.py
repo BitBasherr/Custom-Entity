@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any
 
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -18,7 +18,7 @@ def _pick_city(addr: Dict[str, Any]) -> Optional[str]:
 def _pick_road(addr: Dict[str, Any]) -> Optional[str]:
     for k in (
         "road", "residential", "pedestrian", "footway", "path",
-        "service", "track", "cycleway", "road_reference"
+        "service", "track", "cycleway", "road_reference",
     ):
         v = addr.get(k)
         if v:
@@ -44,41 +44,29 @@ def _make_line1(addr: Dict[str, Any], display_name: str) -> str:
     return (display_name or "").split(",")[0].strip()
 
 
-def _extract_place_name(data: Dict[str, Any], addr: Dict[str, Any], display_name: str) -> Optional[str]:
-    # Prefer explicit OSM "name" if available; else first display part; else None
-    name = data.get("name")
-    if isinstance(name, str) and name.strip():
-        return name.strip()
-    first = (display_name or "").split(",")[0].strip()
-    if first:
-        # If first part is identical to computed line1 (like a road), keep it too
-        return first
-    return None
-
-
-def _classify_place(addr: Dict[str, Any], display_line1: str, data: Dict[str, Any]) -> Tuple[str, str]:
-    """
-    Return (place_type, place_label).
-    place_type is coarse: address | neighbourhood | township | locality | country | place
-    place_label is a human label for that bucket.
-    """
-    # Looks like a street address:
+def _classify_place(addr: Dict[str, Any], display_line1: str, top_category: Optional[str], top_type: Optional[str]) -> tuple[str, str]:
+    # Address-like
     if addr.get("house_number") or _pick_road(addr):
         return "address", display_line1
 
-    # Neighborhood-ish:
+    # POI/amenity/shop/etc. labels
+    if top_category or top_type:
+        label = top_type or top_category or "place"
+        return "poi", label.replace("_", " ").title()
+
+    # Neighborhood-ish
     for k in ("neighbourhood", "suburb", "quarter", "borough", "city_district"):
         v = addr.get(k)
         if v:
             return "neighbourhood", v
 
-    # Township-ish:
+    # Township-ish
     for k in ("township", "municipality"):
         v = addr.get(k)
         if v:
             return "township", v
 
-    # Town/city-level:
+    # Town/city-level
     for k in ("city", "town", "village", "hamlet"):
         v = addr.get(k)
         if v:
@@ -87,60 +75,36 @@ def _classify_place(addr: Dict[str, Any], display_line1: str, data: Dict[str, An
     if addr.get("country"):
         return "country", addr["country"]
 
-    # Fallback to the first display line:
     return "place", display_line1 or "place"
 
 
-def _smart_label(category: Optional[str], type_detail: Optional[str], place_name: Optional[str], line1: str) -> Optional[str]:
-    """
-    Build a friendlier label when we can (parking lots, fuel, supermarkets, etc.)
-    Examples:
-      amenity=parking             -> "Parking Lot at {place_name or line1}"
-      amenity=fuel                -> "Gas Station at {place_name or line1}"
-      shop=supermarket (category='shop', type='supermarket') -> "Supermarket at …"
-    """
-    cat = (category or "").strip().lower()
-    typ = (type_detail or "").strip().lower()
-    at = place_name or line1
+def _smart_place_label(name: Optional[str], place_type: str, type_detail: Optional[str], base_line1: str, addr: Dict[str, Any]) -> str:
+    """Human-friendly synthesized label, e.g. 'Parking Lot at Walmart'."""
+    t = (type_detail or "").lower()
+    if place_type == "poi":
+        # Tailored cases
+        if t in {"parking", "parking_entrance"}:
+            at = name or base_line1 or _pick_city(addr) or ""
+            return f"Parking Lot{(' at ' + at) if at else ''}"
+        if t in {"school", "university", "college"}:
+            return f"School{(' — ' + name) if name else ''}"
+        if t in {"hospital", "clinic"}:
+            return f"Hospital{(' — ' + name) if name else ''}"
+        if t in {"fuel", "charging_station"}:
+            return f"Fuel/Charging{(' — ' + name) if name else ''}"
+        if t in {"supermarket", "mall"}:
+            return f"Shopping{(' — ' + name) if name else ''}"
+        if t in {"restaurant", "fast_food", "cafe"}:
+            return f"Eating{(' — ' + name) if name else ''}"
+        if t in {"bank", "atm"}:
+            return f"Bank/ATM{(' — ' + name) if name else ''}"
+        if t in {"pharmacy"}:
+            return f"Pharmacy{(' — ' + name) if name else ''}"
 
-    if not cat and not typ:
-        return None
-
-    # Amenity-based
-    if cat == "amenity":
-        if typ in {"parking", "parking_space", "motorcycle_parking"}:
-            return f"Parking Lot at {at}"
-        if typ in {"fuel"}:
-            return f"Gas Station at {at}"
-        if typ in {"bank"}:
-            return f"Bank at {at}"
-        if typ in {"school", "college", "university"}:
-            return f"School at {at}"
-        if typ in {"hospital", "clinic", "doctors", "dentist"}:
-            return f"Medical Facility at {at}"
-        if typ in {"fast_food", "restaurant", "cafe"}:
-            return f"Restaurant at {at}"
-
-    # Shop-based
-    if cat == "shop":
-        if typ in {"supermarket", "convenience"}:
-            return f"Supermarket at {at}"
-        if typ in {"mall"}:
-            return f"Mall at {at}"
-        if typ in {"department_store"}:
-            return f"Department Store at {at}"
-        return f"Shop at {at}"
-
-    # Leisure/tourism quick wins
-    if cat in {"leisure", "tourism"}:
-        return f"{typ.capitalize() if typ else cat.capitalize()} at {at}"
-
-    # Generic fallback
-    if typ:
-        return f"{typ.replace('_',' ').title()} at {at}"
-    if cat:
-        return f"{cat.replace('_',' ').title()} at {at}"
-    return None
+    # Generic POI or address/locality fallback
+    if name:
+        return name
+    return base_line1 or _pick_city(addr) or "place"
 
 
 async def async_reverse_geocode(
@@ -151,8 +115,9 @@ async def async_reverse_geocode(
     lang: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
-    Nominatim reverse geocode with structured output + classification + smart label.
-    Returns a dict with many keys (only non-empty ones are returned).
+    Minimal Nominatim reverse geocode with structured output + classification.
+    Returns a dict with keys from const.ADDRESS_FIELD_KEYS subset plus:
+      line1, display_name
     """
     if lat is None or lon is None:
         return None
@@ -180,11 +145,14 @@ async def async_reverse_geocode(
         addr = {}
 
     line1 = _make_line1(addr, display)
-    place_type, place_label = _classify_place(addr, line1, data)
-    place_name = _extract_place_name(data, addr, display)  # sticky-ish human name
-    cat = data.get("category")
-    typ = data.get("type")
-    smart = _smart_label(cat, typ, place_name, line1)
+    category = (data.get("category") or "") or None
+    type_detail = (data.get("type") or "") or None
+
+    place_type, place_label = _classify_place(addr, line1, category, type_detail)
+
+    # POI name if available (Nominatim top-level 'name')
+    place_name = data.get("name")
+    smart_label = _smart_place_label(place_name, place_type, type_detail, line1, addr)
 
     result: Dict[str, Any] = {
         "line1": line1,
@@ -203,16 +171,16 @@ async def async_reverse_geocode(
         "village": addr.get("village"),
         "hamlet": addr.get("hamlet"),
         "municipality": addr.get("municipality"),
-        "osm_category": cat,
-        "osm_type_detail": typ,
+        "osm_category": category,
+        "osm_type_detail": type_detail,
         "place_type": place_type,
         "place_label": place_label,
-        "smart_place_label": smart,
         "place_name": place_name,
+        "smart_place_label": smart_label,
         "display_name": display,
     }
     # Strip empties
-    return {k: v for k, v in result.items() if v is not None and v != ""}
+    return {k: v for k, v in result.items() if v}
 
 
 def haversine_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
