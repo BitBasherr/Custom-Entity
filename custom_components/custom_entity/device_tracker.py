@@ -11,8 +11,7 @@ from typing import Optional, Dict, Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_state_change_event
-from homeassistant.components.device_tracker.config_entry import TrackerEntity
-from homeassistant.components.device_tracker.const import SourceType
+from homeassistant.components.device_tracker import SourceType, TrackerEntity
 from homeassistant.components.zone import async_active_zone  # derive zone name from lat/lon
 
 from .const import (
@@ -220,12 +219,16 @@ class CustomTrackerEntity(TrackerEntity):
             return z.name
         return "not_home"
 
-    @property
-    def location_name(self) -> str | None:
+    def _compute_location_name(self) -> str | None:
         """
         Default: return None so HA derives zone from lat/lon.
         If hyphenate is enabled and combine is configured, build "base - value".
         If presence helper is truthy and NOT hyphenating, force "home".
+
+        [Claude-Fable-5 2026-07-11] Was a ``location_name`` property override,
+        which HA deprecated (unsupported from 2027.7). The value is now pushed
+        into ``self._attr_location_name`` from ``_refresh()`` before every
+        state write, preserving the exact same displayed behaviour.
         """
         if self._hyphenate and self._combine and self._combine_entity:
             base = self._base_zone_name() or "not_home"
@@ -462,6 +465,10 @@ class CustomTrackerEntity(TrackerEntity):
         # update picture from person/source
         self._update_picture()
 
+        # location label LAST — it reads the lat/lon + combine/presence state
+        # mirrored above (replaces the deprecated location_name property override)
+        self._attr_location_name = self._compute_location_name()
+
     async def _maybe_reverse_geocode(self, lat: float, lon: float):
         now = monotonic()
         if now - self._last_lookup_ts < self._min_interval_min * 60:
@@ -482,4 +489,5 @@ class CustomTrackerEntity(TrackerEntity):
             self._last_lookup_lon = lon
             self._apply_address_to_attrs(info)
             self._postprocess_smart_label(self._base_zone_name() or "not_home")
+            self._attr_location_name = self._compute_location_name()
             self.async_write_ha_state()
